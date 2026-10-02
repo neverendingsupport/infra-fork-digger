@@ -1,3 +1,12 @@
+> [!WARNING]
+> **Internal-use fork. Not supported by HeroDevs.**
+>
+> This is the HeroDevs Shared Services team's fork of [diggerhq/digger](https://github.com/diggerhq/digger). We run it to keep our own Terraform automation working while upstream development is paused. It isn't a HeroDevs product, and we don't offer support, security fixes, or compatibility promises to anyone else who uses it.
+>
+> Our deployment changes live on `nes-main`. The `develop` branch tracks upstream without local changes. Fixes that would help everyone go upstream as pull requests against `develop`, so this fork can merge back cleanly if upstream development resumes.
+>
+> For the original project, documentation, and community, use [diggerhq/digger](https://github.com/diggerhq/digger). Everything below this note is the upstream README.
+
 <p align="center">
   <img width="748" height="245" alt="Image" src="https://github.com/user-attachments/assets/13b22a04-4b3b-44fd-b6fe-292afc15ad14" />
   <br/>
