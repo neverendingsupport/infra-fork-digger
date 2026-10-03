@@ -15,7 +15,11 @@ type: application
 # This is the chart version. This version number should be incremented each time you make changes
 # to the chart and its templates, including the app version.
 # Versions are expected to follow Semantic Versioning (https://semver.org/)
-version: 0.1.13
+# neverendingsupport fork: <upstream chart version>-nes.<N>. The base is the
+# upstream release our changes sit on, and N counts our chart revisions on
+# that base, the same way our backend images are tagged. Upstream pull
+# requests bump the plain version instead.
+version: 0.1.12-nes.1
 
 # This is the version number of the application being deployed. This version number should be
 # incremented each time you make changes to the application. Versions are not expected to
