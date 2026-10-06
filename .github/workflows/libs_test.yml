@@ -10,6 +10,9 @@ jobs:
   build:
     name: Build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
 
     steps:
       - name: Setup Opentofu
@@ -57,14 +60,37 @@ jobs:
         with:
           tofu_version: 1.8.5
 
+      # The license test reads DIGGER_LICENSE_KEY from Secrets Manager through
+      # this repository's GitHub OIDC role. Pull requests from other forks get
+      # no OIDC token, so they skip these steps and the license test fails
+      # for them, as it always has.
+      - name: Configure AWS credentials
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.aws_oidc_role_arn }}
+          role-session-name: digger-libs-tests
+          aws-region: us-west-2
+
+      - name: Read the Digger license
+        if: github.event_name == 'push' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: aws-actions/aws-secretsmanager-get-secrets@2297f9a879480a9e3af9b293ed15c70caf8e1c88 # v3.0.2
+        with:
+          # {"license_key": ...} becomes DIGGER_LICENSE_KEY.
+          secret-ids: |
+            DIGGER,digger/infra-01/license
+          parse-json-secrets: true
+
       - name: Test
         run: |
+          # The license is already in DIGGER_LICENSE_KEY. Drop the AWS
+          # credentials the earlier step exported, so tests that read AWS
+          # settings from the environment see what they set themselves.
+          unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN AWS_REGION AWS_DEFAULT_REGION
           if [ "${{ steps.pr_check.outputs.is_external }}" = "true" ]; then
             export IS_EXTERNAL_PR="true"
             go test ./... 
           else
             go test ./...
           fi
-        env:
-          DIGGER_LICENSE_KEY: ${{ secrets.TEST_DIGGER_LICENSE_KEY}}
         working-directory: libs
