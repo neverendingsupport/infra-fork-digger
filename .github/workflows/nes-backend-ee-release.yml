@@ -1,0 +1,284 @@
+---
+name: NES backend EE release
+
+# Fork-only workflow. Builds the EE backend image and packages the
+# digger-backend Helm chart from a release tag on nes-main, publishes both to
+# GHCR, and records them on the infra-prod branch. Argo CD reads version.yaml
+# from infra-prod, so a new tag deploys itself.
+#
+# Release by pushing a tag on a nes-main commit:
+#
+#   git tag -a nes/backend-ee/v0.1.7.32-nes.1 -m "backend-ee v0.1.7.32-nes.1" <sha>
+#   git push origin nes/backend-ee/v0.1.7.32-nes.1
+#
+# The nes/ prefix keeps upstream's backend-ee-release.yml, which builds on
+# backend-ee/v* tags with upstream's Depot project, from firing too. The
+# -nes.N suffix marks our build of upstream's version, so it can't be
+# confused with an upstream release of the next number.
+#
+# The chart version comes from Chart.yaml and uses the same -nes.N suffix.
+# A version that's already published is reused only if its contents match
+# the tagged commit, so bump Chart.yaml whenever the chart changes. That check
+# runs after the image is pushed, so if it fails, bump Chart.yaml and release
+# under a new -nes.N tag.
+#
+# Push one release tag at a time and let it finish. Two releases building at
+# once can promote in either order. If promotion fails, use "Re-run failed
+# jobs": it reuses what was already pushed. "Re-run all jobs" rebuilds the
+# image, and the base image and packages float, so the same version tag would
+# move to different bytes. Re-running an older release's promote job, or
+# pushing an older tag again, rolls infra-prod back.
+#
+# Promotion follows the shared HeroDevs pattern:
+# https://github.com/neverendingsupport/ci/blob/main/docs/argocd-promotion.md
+
+on:
+  push:
+    tags:
+      - "nes/backend-ee/v*"
+
+permissions:
+  contents: read
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository }}/digger-backend-ee
+  CHART_DIR: self-hosting/kubernetes/helm-charts/digger-backend
+  CHART_REPO: ghcr.io/${{ github.repository_owner }}/charts
+  # Fixed, so a renamed chart can't push into another chart's package.
+  CHART_NAME: digger-backend
+
+jobs:
+  image:
+    # Native arm64. The only consumer runs on arm64 nodes, and the Dockerfile
+    # compiles inside the target platform, so other architectures would need
+    # QEMU or a Dockerfile change.
+    runs-on: ubuntu-24.04-arm
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          # The repository is public, so the fetch below needs no token, and
+          # the build context shouldn't carry one.
+          persist-credentials: false
+      # A tag can point anywhere, including a commit that never went through a
+      # nes-main PR. Only release what nes-main already contains.
+      - name: Refuse tags that aren't on nes-main
+        run: |
+          set -euo pipefail
+          git fetch --quiet --no-tags origin nes-main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" FETCH_HEAD; then
+            echo "::error::${GITHUB_REF_NAME} points at ${GITHUB_SHA}, which isn't on nes-main."
+            exit 1
+          fi
+      - name: Derive version
+        id: version
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#nes/backend-ee/}"
+          if [[ ! "${version}" =~ ^v[0-9]+(\.[0-9]+){2,3}-nes\.[0-9]+$ ]]; then
+            echo "::error::${GITHUB_REF_NAME} isn't nes/backend-ee/vX.Y.Z[.N]-nes.M."
+            exit 1
+          fi
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ${{ env.IMAGE_NAME }}
+          # The version is what infra-prod records. The commit SHA tag lets
+          # anyone trace an image back to source.
+          tags: |
+            type=raw,value=${{ steps.version.outputs.version }}
+            type=raw,value=${{ github.sha }}
+      - id: build
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: ./Dockerfile_backend_ee
+          platforms: linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            COMMIT_SHA=${{ github.sha }}
+
+  chart:
+    # The image job refuses tags that aren't on nes-main. Waiting for it keeps
+    # a chart from such a tag from ever being published.
+    needs: image
+    runs-on: ubuntu-latest
+    # Two releases with the same chart version must not race to publish it.
+    concurrency:
+      group: digger-chart-publish
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      version: ${{ steps.package.outputs.version }}
+      digest: ${{ steps.publish.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          # The publish step matches this version's registry error messages.
+          version: v4.2.3
+      - name: Package chart
+        id: package
+        run: |
+          set -euo pipefail
+          name="$(awk '$1 == "name:" { print $2; exit }' "${CHART_DIR}/Chart.yaml")"
+          version="$(awk '$1 == "version:" { print $2; exit }' "${CHART_DIR}/Chart.yaml")"
+          if [[ "${name}" != "${CHART_NAME}" ]]; then
+            echo "::error::Chart.yaml names the chart ${name}; this workflow only publishes ${CHART_NAME}."
+            exit 1
+          fi
+          if [[ ! "${version}" =~ -nes\.[0-9]+$ ]]; then
+            echo "::error::Chart version ${version} needs a -nes.N suffix so it can't be mistaken for an upstream release."
+            exit 1
+          fi
+          helm lint "${CHART_DIR}"
+          helm package "${CHART_DIR}" --destination dist
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+      - name: Publish chart, or confirm the published copy matches
+        id: publish
+        env:
+          VERSION: ${{ steps.package.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_USER: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${GH_TOKEN}" | helm registry login ghcr.io \
+            --username "${GH_USER}" --password-stdin
+
+          # GHCR answers "<ref>: not found" for a missing version and a 403
+          # "denied" for a package that doesn't exist yet. Writing implies
+          # reading, so a denied pull can't hide a chart this job could
+          # overwrite. Any other failure, including other 404s, stops the
+          # release.
+          status=0
+          helm pull "oci://${CHART_REPO}/${CHART_NAME}" --version "${VERSION}" \
+            --untar --untardir published/x >pull.log 2>&1 || status=$?
+          if [[ "${status}" -eq 0 ]]; then
+            mkdir -p local/x
+            tar -xzf "dist/${CHART_NAME}-${VERSION}.tgz" -C local/x
+            if ! diff -r published/x local/x; then
+              echo "::error::Chart ${CHART_NAME} ${VERSION} is already published with different contents. Bump the version in ${CHART_DIR}/Chart.yaml."
+              exit 1
+            fi
+            digest="$(awk '$1 == "Digest:" { print $2 }' pull.log)"
+            echo "Chart ${CHART_NAME} ${VERSION} is already published with the same contents."
+          elif grep -qE ":${VERSION}: not found\$|response status code 403: denied: " pull.log; then
+            helm push "dist/${CHART_NAME}-${VERSION}.tgz" "oci://${CHART_REPO}" 2>&1 | tee push.log
+            digest="$(awk '$1 == "Digest:" { print $2 }' push.log)"
+          else
+            cat pull.log
+            echo "::error::Couldn't tell whether ${CHART_NAME} ${VERSION} is published."
+            exit 1
+          fi
+          if [[ ! "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Couldn't read the chart digest."
+            exit 1
+          fi
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+
+  promote:
+    needs: [image, chart]
+    runs-on: ubuntu-latest
+    # Only one release may write infra-prod at a time.
+    concurrency:
+      group: infra-argocd-promotion
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # infra-prod only accepts pushes from the herodevs-automation app and
+      # the infrastructure team, so promotion uses an app token. The app's
+      # credentials come from Secrets Manager through this repository's GitHub
+      # OIDC role. The org variable that names the secret isn't visible to
+      # public repositories, so the secret is named here.
+      - uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
+        with:
+          role-to-assume: ${{ vars.aws_oidc_role_arn }}
+          role-session-name: digger-release-promote
+          aws-region: us-west-2
+      - uses: aws-actions/aws-secretsmanager-get-secrets@2297f9a879480a9e3af9b293ed15c70caf8e1c88 # v3.0.2
+        with:
+          secret-ids: |
+            ,gh-app-herodevs-automation
+          name-transformation: none
+          parse-json-secrets: true
+      - id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ env.client_id }}
+          private-key: ${{ env.private_key }}
+          # Defaults to this repository.
+          permission-contents: write
+      # The shared promote action lives in neverendingsupport/ci, which is
+      # internal, and a public repository can't use internal actions. A second,
+      # read-only app token checks out that action at a pinned commit, and the
+      # job runs it from a local path.
+      - id: ci-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ env.client_id }}
+          private-key: ${{ env.private_key }}
+          owner: ${{ github.repository_owner }}
+          repositories: ci
+          permission-contents: read
+      # The tokens are all later steps need; don't leave the app key in the
+      # job environment.
+      - name: Drop the app credentials
+        run: |
+          {
+            echo "app_id="
+            echo "client_id="
+            echo "private_key="
+            echo "private_key_fingerprint="
+          } >> "${GITHUB_ENV}"
+      - name: Check out the promote action
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: neverendingsupport/ci
+          # Renovate doesn't track this pin; bump it by hand to a newer
+          # actions-infra-argocd-promote-stage-* release.
+          ref: b0ffa3ca57fb16d3a19709dff42ee546abae6e52 # actions-infra-argocd-promote-stage-1.1.0
+          token: ${{ steps.ci-token.outputs.token }}
+          path: .ci
+          sparse-checkout: .github/actions/infra-argocd-promote-stage
+          persist-credentials: false
+      # The image and chart land in one commit, so Argo CD sees them as one
+      # release.
+      - name: Publish infra-prod metadata
+        uses: ./.ci/.github/actions/infra-argocd-promote-stage
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          image-repository: ${{ env.IMAGE_NAME }}
+          image-tag: ${{ needs.image.outputs.version }}
+          image-digest: ${{ needs.image.outputs.digest }}
+          additional-images: >-
+            {
+              "chart": {
+                "repository": "${{ env.CHART_REPO }}/${{ env.CHART_NAME }}",
+                "tag": "${{ needs.chart.outputs.version }}",
+                "digest": "${{ needs.chart.outputs.digest }}"
+              }
+            }
+          # There's no staging environment; releases go straight to the infra
+          # cluster.
+          branch: infra-prod
