@@ -1,0 +1,27 @@
+---
+schemaVersion: 2
+promotion:
+  mode: unit
+images:
+  default:
+    repository: ghcr.io/neverendingsupport/infra-fork-digger/digger-backend-ee
+    tag: v0.1.7.32-nes.1
+    digest: sha256:7ce4b2c367ff84542bd5a35353bf360f911e148efb0cf77b6aa1a0dc95c5acfe
+    source:
+      repository: neverendingsupport/infra-fork-digger
+      revision: a43a6da453b6245db809fdc17e6785d5810c374d
+    published:
+      at: '2026-10-07T18:58:45.679Z'
+      by: dannysauer
+      run: https://github.com/neverendingsupport/infra-fork-digger/actions/runs/37670572866
+  chart:
+    repository: ghcr.io/neverendingsupport/charts/digger-backend
+    tag: 0.1.12-nes.1
+    digest: sha256:b829dc4b468fafd1eada06ea7aaaf6c191d2149b126f0d05153c03c0de5cbd57
+    source:
+      repository: neverendingsupport/infra-fork-digger
+      revision: a43a6da453b6245db809fdc17e6785d5810c374d
+    published:
+      at: '2026-10-07T18:58:45.679Z'
+      by: dannysauer
+      run: https://github.com/neverendingsupport/infra-fork-digger/actions/runs/37670572866
