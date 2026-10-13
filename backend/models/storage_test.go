@@ -2,11 +2,13 @@ package models
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/diggerhq/digger/libs/scheduler"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
@@ -269,40 +271,114 @@ func TestDiggerLockFunctionalities(t *testing.T) {
 	assert.Equal(t, "org/repo2#prod", existingLocksAfterDeletion[1].Resource)
 }
 
-func TestGetImpactedProjectSingleFiltersByProjectName(t *testing.T) {
-	// dedicated in-memory DB: sqlite index names are global and ImpactedProject
-	// shares "idx_org_repo" with other models migrated by setupSuite
-	gdb, err := gorm.Open(sqlite.Open("file::memory:"), &gorm.Config{
+// newImpactedProjectDB migrates only ImpactedProject into its own database:
+// SQLite index names are global, and ImpactedProject shares "idx_org_repo"
+// with models that setupSuite migrates.
+func newImpactedProjectDB(t *testing.T) *Database {
+	t.Helper()
+	gdb, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "impacted.db")), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Silent),
 	})
-	assert.NoError(t, err)
-	assert.NoError(t, gdb.AutoMigrate(&ImpactedProject{}))
-	database := &Database{GormDB: gdb}
+	require.NoError(t, err)
+	require.NoError(t, gdb.AutoMigrate(&ImpactedProject{}))
+	return &Database{GormDB: gdb}
+}
 
+func createImpactedProjects(t *testing.T, db *Database, repo, sha string, names ...string) {
+	t.Helper()
+	for _, name := range names {
+		_, err := db.CreateImpactedProject(repo, sha, name, nil, nil)
+		require.NoError(t, err)
+	}
+}
+
+// Each project's apply has to mark its own row, or auto-merge never fires for
+// a PR that touches more than one project.
+func TestAllImpactedProjectAppliedMultiProject(t *testing.T) {
+	db := newImpactedProjectDB(t)
 	repo, sha := "org/repo", "abc123"
-	_, err = database.CreateImpactedProject(repo, sha, "project-a", nil, nil)
-	assert.NoError(t, err)
-	_, err = database.CreateImpactedProject(repo, sha, "project-b", nil, nil)
-	assert.NoError(t, err)
+	names := []string{"project-a", "project-b", "project-c"}
+	createImpactedProjects(t, db, repo, sha, names...)
 
-	for _, name := range []string{"project-a", "project-b"} {
-		ip, err := database.GetImpactedProjectSingle(repo, sha, name)
-		assert.NoError(t, err)
-		if assert.NotNil(t, ip) {
-			assert.Equal(t, name, ip.ProjectName)
-		}
+	for i, name := range names {
+		allApplied, _, err := db.AllImpactedProjectApplied(repo, sha)
+		require.NoError(t, err)
+		assert.False(t, allApplied, "only %d of %d projects applied", i, len(names))
+
+		marked, err := db.MarkImpactedProjectApplied(repo, sha, name)
+		require.NoError(t, err)
+		assert.Equal(t, int64(1), marked)
 	}
 
-	// updating one project must not mark the other as applied
-	ipB, _ := database.GetImpactedProjectSingle(repo, sha, "project-b")
-	ipB.Applied = true
-	assert.NoError(t, database.GormDB.Save(ipB).Error)
-	applied, _, err := database.AllImpactedProjectApplied(repo, sha)
-	assert.NoError(t, err)
-	assert.False(t, applied)
+	allApplied, projects, err := db.AllImpactedProjectApplied(repo, sha)
+	require.NoError(t, err)
+	assert.Len(t, projects, len(names))
+	assert.True(t, allApplied)
+}
 
-	// unknown project: not found, not a zero-value record
-	ip, err := database.GetImpactedProjectSingle(repo, sha, "missing")
-	assert.NoError(t, err)
-	assert.Nil(t, ip)
+func TestMarkImpactedProjectAppliedUpdatesDuplicates(t *testing.T) {
+	db := newImpactedProjectDB(t)
+	repo, sha := "org/repo", "abc123"
+	createImpactedProjects(t, db, repo, sha, "project-a", "project-b")
+	createImpactedProjects(t, db, repo, sha, "project-a", "project-b")
+
+	marked, err := db.MarkImpactedProjectApplied(repo, sha, "project-a")
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), marked)
+
+	allApplied, _, err := db.AllImpactedProjectApplied(repo, sha)
+	require.NoError(t, err)
+	assert.False(t, allApplied, "project-b isn't applied yet")
+
+	marked, err = db.MarkImpactedProjectApplied(repo, sha, "project-b")
+	require.NoError(t, err)
+	assert.Equal(t, int64(2), marked)
+
+	allApplied, projects, err := db.AllImpactedProjectApplied(repo, sha)
+	require.NoError(t, err)
+	assert.Len(t, projects, 4)
+	assert.True(t, allApplied)
+}
+
+func TestMarkImpactedProjectPlannedOnlyTouchesThatProject(t *testing.T) {
+	db := newImpactedProjectDB(t)
+	repo, sha := "org/repo", "abc123"
+	createImpactedProjects(t, db, repo, sha, "project-a", "project-b")
+
+	marked, err := db.MarkImpactedProjectPlanned(repo, sha, "project-a")
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), marked)
+
+	projects, err := db.GetImpactedProjects(repo, sha)
+	require.NoError(t, err)
+	for _, p := range projects {
+		assert.Equal(t, p.ProjectName == "project-a", p.Planned, p.ProjectName)
+		assert.False(t, p.Applied, p.ProjectName)
+	}
+}
+
+func TestMarkImpactedProjectAppliedKeepsPlanned(t *testing.T) {
+	db := newImpactedProjectDB(t)
+	repo, sha := "org/repo", "abc123"
+	createImpactedProjects(t, db, repo, sha, "project-a")
+
+	_, err := db.MarkImpactedProjectPlanned(repo, sha, "project-a")
+	require.NoError(t, err)
+	_, err = db.MarkImpactedProjectApplied(repo, sha, "project-a")
+	require.NoError(t, err)
+
+	projects, err := db.GetImpactedProjects(repo, sha)
+	require.NoError(t, err)
+	require.Len(t, projects, 1)
+	assert.True(t, projects[0].Planned)
+	assert.True(t, projects[0].Applied)
+}
+
+func TestMarkImpactedProjectMissingReturnsZero(t *testing.T) {
+	db := newImpactedProjectDB(t)
+	createImpactedProjects(t, db, "org/repo", "abc123", "project-a")
+
+	marked, err := db.MarkImpactedProjectApplied("org/repo", "abc123", "missing")
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), marked)
 }
