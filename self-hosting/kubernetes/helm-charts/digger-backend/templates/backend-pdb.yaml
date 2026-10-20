@@ -1,0 +1,17 @@
+{{- if .Values.digger.podDisruptionBudget.enabled }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "digger-backend.fullname" . }}-web
+spec:
+  {{- with .Values.digger.podDisruptionBudget }}
+  {{- if not (kindIs "invalid" .minAvailable) }}
+  minAvailable: {{ .minAvailable }}
+  {{- else }}
+  maxUnavailable: {{ .maxUnavailable }}
+  {{- end }}
+  {{- end }}
+  selector:
+    matchLabels:
+      app: {{ include "digger-backend.name" . }}-web
+{{- end }}

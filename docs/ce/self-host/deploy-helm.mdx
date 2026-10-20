@@ -49,6 +49,31 @@ description: "Learn how to use Helm chart to install Digger on your Kubernetes c
     ```
   </Step>
 
+  <Step title="Run more than one replica (optional)">
+    With one replica, the backend can't answer webhooks or job callbacks while its pod restarts. To keep a pod serving through rollouts and node drains, run two replicas with a disruption budget. Add a short `preStop` sleep, so a stopping pod keeps serving while the Service stops sending it traffic.
+
+    The `sleep` hook needs Kubernetes 1.30 or later. On older clusters, use `exec: {command: ["sleep", "10"]}` instead.
+
+    ```yaml values.yaml
+    digger:
+      replicaCount: 2
+      podDisruptionBudget:
+        enabled: true
+      lifecycle:
+        preStop:
+          sleep:
+            seconds: 10
+    ```
+
+    The budget defaults to `maxUnavailable: 1`, so a drain evicts one pod at a time and still works with one replica. Every replica runs the database migrations when it starts.
+
+    <Note>
+      This doesn't make restarts lossless. The backend doesn't shut down gracefully yet, so a stopping pod runs until its termination grace period ends. Work that a request started in the background can be lost when the pod stops.
+    </Note>
+
+    Since chart `0.1.12-nes.3`, the backend has a readiness probe on `/health`. The probe only starts after the startup probe passes. To remove it, set `digger.readinessProbe` to `null`. To use a different probe type, also set `digger.readinessProbe.httpGet` to `null`.
+  </Step>
+
 
   <Step title="Configure database">
     Choose your database configuration based on your environment:

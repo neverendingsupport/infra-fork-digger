@@ -45,7 +45,11 @@ digger:
   #    cpu: 500m
   #    memory: 200Mi
 
-  # livenessProbe and startupProbe settings
+  # Number of backend pods. Run more than one, with podDisruptionBudget and a
+  # lifecycle preStop delay, so rollouts and node drains keep a pod serving.
+  replicaCount: 1
+
+  # livenessProbe, startupProbe and readinessProbe settings
   # https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
 
   # livenessProbe: configure probing of /health endpoint
@@ -65,6 +69,35 @@ digger:
       port: 3000
     failureThreshold: 30
     periodSeconds: 10
+
+  # readinessProbe: keep a pod out of the Service until /health answers.
+  # Set to null to disable; Helm merges an empty map into the default. To use
+  # a different probe type, also set httpGet to null.
+  readinessProbe:
+    httpGet:
+      path: /health
+      port: 3000
+    periodSeconds: 10
+
+  # Container lifecycle hooks. A short preStop sleep keeps a terminating pod
+  # serving while the Service stops routing to it:
+  # lifecycle:
+  #   preStop:
+  #     sleep:
+  #       seconds: 10
+  lifecycle: {}
+
+  # Seconds to wait for a pod to stop, including any preStop sleep. Unset uses
+  # the Kubernetes default of 30.
+  terminationGracePeriodSeconds: null
+
+  # PodDisruptionBudget for the backend pods. maxUnavailable: 1 lets a drain
+  # evict one pod at a time, even with one replica. Setting minAvailable
+  # replaces it; with one replica, minAvailable: 1 blocks every drain.
+  podDisruptionBudget:
+    enabled: false
+    maxUnavailable: 1
+    minAvailable: null
 
   # service values
   # type: service type (ClusterIP, LoadBalancer, etc)

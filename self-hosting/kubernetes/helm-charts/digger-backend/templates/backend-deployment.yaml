@@ -7,7 +7,7 @@ metadata:
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
-  replicas: 1
+  replicas: {{ .Values.digger.replicaCount }}
   selector:
     matchLabels:
       app: {{ include "digger-backend.name" . }}-web
@@ -20,6 +20,9 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
     spec:
+      {{- if not (kindIs "invalid" .Values.digger.terminationGracePeriodSeconds) }}
+      terminationGracePeriodSeconds: {{ .Values.digger.terminationGracePeriodSeconds }}
+      {{- end }}
       {{- with .Values.digger.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -41,6 +44,14 @@ spec:
           {{ .Values.digger.livenessProbe | toYaml | indent 10 | trim }}
         startupProbe:
           {{ .Values.digger.startupProbe | toYaml | indent 10 | trim }}
+        {{- with .Values.digger.readinessProbe }}
+        readinessProbe:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
+        {{- with .Values.digger.lifecycle }}
+        lifecycle:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
         envFrom:
         - secretRef:
         {{- if not .Values.digger.secret.useExistingSecret }}

@@ -120,4 +120,5 @@ helm upgrade digger-backend ./digger-backend/
    - Use `secret` (singular) not `secrets` in configuration
    - GitHub App private key field is `githubAppKeyFile` (base64 encoded), not `githubAppPrivateKey`
    - Deployment and pod annotations are `digger.deploymentAnnotations` and `digger.podAnnotations`; `digger.ingress.annotations` is only for the Ingress
+   - Availability settings are `digger.replicaCount`, `digger.readinessProbe` (on by default; `null` removes it), `digger.lifecycle`, `digger.terminationGracePeriodSeconds` and `digger.podDisruptionBudget` (`maxUnavailable: 1` by default; setting `minAvailable` replaces it)
    - PostgreSQL config is under `digger.postgres`. The only connection-string setting is `databaseUrlSecretName`, which reads `DATABASE_URL` from a Secret; there is no plain `databaseURL` value
