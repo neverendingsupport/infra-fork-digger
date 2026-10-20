@@ -39,6 +39,14 @@ description: "Learn how to use Helm chart to install Digger on your Kubernetes c
       imagePullSecrets:
         - name: my-registry-credentials
     ```
+
+    To add annotations to the backend Deployment or its pods, set `digger.deploymentAnnotations` or `digger.podAnnotations`. For example, [Stakater Reloader](https://github.com/stakater/Reloader) restarts the backend when a Secret it reads changes:
+
+    ```yaml values.yaml
+    digger:
+      deploymentAnnotations:
+        reloader.stakater.com/auto: "true"
+    ```
   </Step>
 
 

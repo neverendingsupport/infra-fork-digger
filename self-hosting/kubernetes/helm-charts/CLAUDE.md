@@ -119,4 +119,5 @@ helm upgrade digger-backend ./digger-backend/
    - Configuration key names are case-sensitive (`githubAppID` not `githubAppId`)
    - Use `secret` (singular) not `secrets` in configuration
    - GitHub App private key field is `githubAppKeyFile` (base64 encoded), not `githubAppPrivateKey`
+   - Deployment and pod annotations are `digger.deploymentAnnotations` and `digger.podAnnotations`; `digger.ingress.annotations` is only for the Ingress
    - PostgreSQL config is under `digger.postgres`. The only connection-string setting is `databaseUrlSecretName`, which reads `DATABASE_URL` from a Secret; there is no plain `databaseURL` value

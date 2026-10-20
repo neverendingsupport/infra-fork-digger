@@ -15,6 +15,14 @@ digger:
   #   - name: my-registry-credentials
   imagePullSecrets: []
 
+  # Annotations for the backend Deployment, e.g. for Stakater Reloader:
+  # deploymentAnnotations:
+  #   reloader.stakater.com/auto: "true"
+  deploymentAnnotations: {}
+
+  # Annotations for the backend pods
+  podAnnotations: {}
+
   # Custom environment variables to be added to the backend deployment
   # Format:
   # customEnv:

@@ -1,0 +1,26 @@
+suite: test deployment and pod annotations
+templates:
+  - backend-deployment.yaml
+tests:
+  - it: should add no annotations by default
+    asserts:
+      - notExists:
+          path: metadata.annotations
+      - notExists:
+          path: spec.template.metadata.annotations
+
+  - it: should add deployment and pod annotations when configured
+    set:
+      digger.deploymentAnnotations:
+        secret.reloader.stakater.com/reload: digger-internal-secret
+      digger.podAnnotations:
+        example.com/owner: infrastructure
+    asserts:
+      - equal:
+          path: metadata.annotations
+          value:
+            secret.reloader.stakater.com/reload: digger-internal-secret
+      - equal:
+          path: spec.template.metadata.annotations
+          value:
+            example.com/owner: infrastructure

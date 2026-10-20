@@ -2,6 +2,10 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "digger-backend.fullname" . }}-web
+  {{- with .Values.digger.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   replicas: 1
   selector:
@@ -11,6 +15,10 @@ spec:
     metadata:
       labels:
         app: {{ include "digger-backend.name" . }}-web
+      {{- with .Values.digger.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
     spec:
       {{- with .Values.digger.imagePullSecrets }}
       imagePullSecrets:
