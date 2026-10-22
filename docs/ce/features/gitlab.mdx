@@ -43,6 +43,8 @@ projects:
 
 In the repo where you are interested to integrate with digger you need to set up a webhook pointing to your digger hostname. Go to Settings > Webhooks and add digger host name. Set the secret token as “abc123” (same as **`DIGGER_GITLAB_WEBHOOK_SECRET`**) above. make sure that “Comments” and “Merge request events” are selected for Trigger events. Finally you can save.
 
+The backend rejects every GitLab webhook while `DIGGER_GITLAB_WEBHOOK_SECRET` is unset.
+
 ### Create digger pipeline in your gitlab repo
 
 To create a Gitlab pipeline you can use a .gitlab-ci.yml file in the root of your file. In this you need to create a script which downloads Digger binary and invokes it, the purpose here is to have this pipeline triggered by Digger externally. Here is an example of such file:

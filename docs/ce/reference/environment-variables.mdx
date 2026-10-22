@@ -360,7 +360,7 @@ The state backend service manages Terraform state storage and querying.
 </ParamField>
 
 <ParamField path="GITHUB_WEBHOOK_SECRET" type="string" required>
-  Webhook secret for verifying GitHub webhook signatures
+  Webhook secret the orchestrator uses to verify GitHub webhook signatures. The orchestrator rejects every GitHub webhook when it has no webhook secret. CE reads the secret only from this variable. EE uses it only when `GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET` and `GITHUB_APP_PRIVATE_KEY_BASE64` are also set; otherwise it uses the secret stored on the app's GitHub connection.
 </ParamField>
 
 <ParamField path="GITHUB_ORG" type="string">
