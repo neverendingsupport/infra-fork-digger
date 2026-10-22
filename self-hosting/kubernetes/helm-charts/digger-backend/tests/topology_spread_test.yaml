@@ -1,0 +1,90 @@
+suite: test topology spread constraints
+templates:
+  - backend-deployment.yaml
+tests:
+  - it: should render no constraints by default
+    asserts:
+      - notExists:
+          path: spec.template.spec.topologySpreadConstraints
+      - equal:
+          path: spec.template.metadata.labels.app
+          value: digger-backend-web
+
+  - it: should select the backend pods when no labelSelector is given
+    set:
+      digger.topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+    asserts:
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints
+          value:
+            - maxSkew: 1
+              topologyKey: kubernetes.io/hostname
+              whenUnsatisfiable: ScheduleAnyway
+              labelSelector:
+                matchLabels:
+                  app: digger-backend-web
+
+  - it: should keep a labelSelector that is given
+    set:
+      digger.topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              team: infra
+    asserts:
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].labelSelector
+          value:
+            matchLabels:
+              team: infra
+
+  - it: should fill in the selector for every constraint
+    set:
+      digger.topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+    asserts:
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[1].labelSelector.matchLabels.app
+          value: digger-backend-web
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[1].topologyKey
+          value: topology.kubernetes.io/zone
+
+  - it: should pass matchLabelKeys through
+    set:
+      digger.topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          matchLabelKeys:
+            - pod-template-hash
+    asserts:
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].matchLabelKeys
+          value:
+            - pod-template-hash
+
+  - it: should match the pod label when the chart name is overridden
+    set:
+      nameOverride: orchestrator
+      digger.topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+    asserts:
+      - equal:
+          path: spec.template.spec.topologySpreadConstraints[0].labelSelector.matchLabels.app
+          value: orchestrator-web
+      - equal:
+          path: spec.template.metadata.labels.app
+          value: orchestrator-web
