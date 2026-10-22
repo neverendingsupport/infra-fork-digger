@@ -34,7 +34,7 @@ If UI runs on host, use `ORCHESTRATOR_BACKEND_URL=http://localhost:3000` in `ui/
    INTERNAL_BASE_URL=http://localhost:3000             # internal backend URL
    ```
    Optional but useful:
-   - `GITHUB_APP_ID`, `GITHUB_APP_PEM`, `GITHUB_APP_WEBHOOK_SECRET` if you already have an app.
+   - `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY_BASE64`, `GITHUB_WEBHOOK_SECRET` if you already have an app. Without `GITHUB_WEBHOOK_SECRET`, the backend rejects every GitHub webhook.
    - `GITHUB_ORG` if you want `/github/setup` to target an org.
 2. Start the service (from `backend/`):
    ```bash
