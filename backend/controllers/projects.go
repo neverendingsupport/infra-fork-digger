@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/diggerhq/digger/backend/logging"
+	"github.com/diggerhq/digger/backend/background"
 	"github.com/diggerhq/digger/backend/middleware"
 	"github.com/diggerhq/digger/backend/models"
 	"github.com/diggerhq/digger/backend/segment"
@@ -698,10 +698,9 @@ func (d DiggerController) SetJobStatusForProject(c *gin.Context) {
 		slog.Info("Job status updated to created", "jobId", jobId)
 
 		// Update PR comment with real-time status
-		go func(ctx context.Context) {
-			defer logging.InheritRequestLogger(ctx)()
+		background.Go(c.Request.Context(), func(ctx context.Context) {
 			utils.UpdatePRComment(d.GithubClientProvider, jobId, job, "created")
-		}(c.Request.Context())
+		})
 
 	case "triggered":
 		job.Status = orchestrator_scheduler.DiggerJobTriggered
@@ -720,10 +719,9 @@ func (d DiggerController) SetJobStatusForProject(c *gin.Context) {
 		slog.Info("Job status updated to triggered", "jobId", jobId)
 
 		// Update PR comment with real-time status
-		go func(ctx context.Context) {
-			defer logging.InheritRequestLogger(ctx)()
+		background.Go(c.Request.Context(), func(ctx context.Context) {
 			utils.UpdatePRComment(d.GithubClientProvider, jobId, job, "triggered")
-		}(c.Request.Context())
+		})
 
 	case "started":
 		job.Status = orchestrator_scheduler.DiggerJobStarted
@@ -746,10 +744,9 @@ func (d DiggerController) SetJobStatusForProject(c *gin.Context) {
 		slog.Info("Job status updated to started", "jobId", jobId)
 
 		// Update PR comment with real-time status
-		go func(ctx context.Context) {
-			defer logging.InheritRequestLogger(ctx)()
+		background.Go(c.Request.Context(), func(ctx context.Context) {
 			utils.UpdatePRComment(d.GithubClientProvider, jobId, job, "started")
-		}(c.Request.Context())
+		})
 
 	case "succeeded":
 		batch := job.Batch
@@ -831,7 +828,7 @@ func (d DiggerController) SetJobStatusForProject(c *gin.Context) {
 			"batchId", batchId,
 		)
 
-		go func(ctx context.Context) {
+		background.Go(c.Request.Context(), func(ctx context.Context) {
 			defer func() {
 				if r := recover(); r != nil {
 					stack := string(debug.Stack())
@@ -844,7 +841,6 @@ func (d DiggerController) SetJobStatusForProject(c *gin.Context) {
 					)
 				}
 			}()
-			defer logging.InheritRequestLogger(ctx)()
 
 			slog.Debug("Starting post-success job processing", "job_id", jobId)
 
@@ -933,7 +929,7 @@ func (d DiggerController) SetJobStatusForProject(c *gin.Context) {
 			}
 
 			slog.Debug("Successfully processed job completion", "jobId", jobId)
-		}(c.Request.Context())
+		})
 
 		// store digger job summary
 		if request.JobSummary != nil {
@@ -974,10 +970,9 @@ func (d DiggerController) SetJobStatusForProject(c *gin.Context) {
 		}
 
 		// Update PR comment with real-time status for succeeded job
-		go func(ctx context.Context) {
-			defer logging.InheritRequestLogger(ctx)()
+		background.Go(c.Request.Context(), func(ctx context.Context) {
 			utils.UpdatePRComment(d.GithubClientProvider, jobId, job, "succeeded")
-		}(c.Request.Context())
+		})
 
 	case "failed":
 		segment.Track(*org, "", "", "github", "ci_job_failed", nil)
@@ -1001,10 +996,9 @@ func (d DiggerController) SetJobStatusForProject(c *gin.Context) {
 		)
 
 		// Update PR comment with real-time status for failed job
-		go func(ctx context.Context) {
-			defer logging.InheritRequestLogger(ctx)()
+		background.Go(c.Request.Context(), func(ctx context.Context) {
 			utils.UpdatePRComment(d.GithubClientProvider, jobId, job, "failed")
-		}(c.Request.Context())
+		})
 
 	default:
 		slog.Warn("Unexpected job status received",
@@ -1083,8 +1077,8 @@ func (d DiggerController) SetJobStatusForProject(c *gin.Context) {
 		"jobId", jobId)
 
 	// performing this in a goroutine to avoid huge latencies (added by ai summary gen)
-	go func() {
-		err = UpdateCheckRunForBatch(d.GithubClientProvider, refreshedBatch, aiSummaryEnabled)
+	background.Go(c.Request.Context(), func(context.Context) {
+		err := UpdateCheckRunForBatch(d.GithubClientProvider, refreshedBatch, aiSummaryEnabled)
 		if err != nil {
 			slog.Warn("DIAGNOSTIC #7: Failed to update GitHub Check Run for batch (non-fatal)",
 				"batchId", batch.ID,
@@ -1096,7 +1090,7 @@ func (d DiggerController) SetJobStatusForProject(c *gin.Context) {
 		} else {
 			slog.Debug("Successfully updated GitHub Check Run for batch", "batchId", batch.ID)
 		}
-	}()
+	})
 
 	slog.Debug("Fetching refreshed job", "jobId", jobId, "batchId", batch.ID)
 	refreshedJob, err := models.DB.GetDiggerJob(jobId)
@@ -1116,8 +1110,8 @@ func (d DiggerController) SetJobStatusForProject(c *gin.Context) {
 		"batchId", batch.ID)
 
 	// performing this in a goroutine to avoid huge latencies (added by ai summary gen)
-	go func() {
-		err = UpdateCheckRunForJob(d.GithubClientProvider, refreshedJob, aiSummaryEnabled)
+	background.Go(c.Request.Context(), func(context.Context) {
+		err := UpdateCheckRunForJob(d.GithubClientProvider, refreshedJob, aiSummaryEnabled)
 		if err != nil {
 			slog.Warn("DIAGNOSTIC #9: Failed to update GitHub Check Run for job (non-fatal)",
 				"jobId", jobId,
@@ -1130,7 +1124,7 @@ func (d DiggerController) SetJobStatusForProject(c *gin.Context) {
 		} else {
 			slog.Debug("Successfully updated GitHub Check Run for job", "jobId", jobId)
 		}
-	}()
+	})
 
 
 	if batch.ReportTerraformOutputs {

@@ -38,7 +38,7 @@ ENV ATLAS_VERSION v0.38.0
 
 WORKDIR /app
 
-RUN apt-get update && apt-get install -y ca-certificates curl && apt-get install -y git && apt-get clean all
+RUN apt-get update && apt-get install -y ca-certificates curl && apt-get install -y git tini && apt-get clean all
 RUN update-ca-certificates
 
 RUN echo "commit sha: ${COMMIT_SHA}"
@@ -60,5 +60,5 @@ COPY --from=builder /go/src/github.com/diggerhq/digger/backend/scripts/entrypoin
 COPY --from=builder /go/src/github.com/diggerhq/digger/backend/migrations /app/migrations
 ADD ee/backend/templates ./templates
 
-# Run the binary
-ENTRYPOINT ["/bin/bash", "/app/entrypoint.sh"]
+# tini runs as PID 1 to forward signals and reap orphaned git processes.
+ENTRYPOINT ["/usr/bin/tini", "--", "/bin/bash", "/app/entrypoint.sh"]

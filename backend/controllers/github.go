@@ -7,8 +7,8 @@ import (
 	"reflect"
 	"strconv"
 
+	"github.com/diggerhq/digger/backend/background"
 	"github.com/diggerhq/digger/backend/ci_backends"
-	"github.com/diggerhq/digger/backend/logging"
 	"github.com/diggerhq/digger/backend/middleware"
 	"github.com/diggerhq/digger/backend/models"
 	"github.com/diggerhq/digger/backend/utils"
@@ -67,8 +67,7 @@ func (d DiggerController) GithubAppWebHook(c *gin.Context) {
 		)
 
 		// Run in goroutine to avoid webhook timeouts for large installations
-		go func(ctx context.Context) {
-			defer logging.InheritRequestLogger(ctx)()
+		background.Go(c.Request.Context(), func(ctx context.Context) {
 			if *event.Action == "deleted" {
 				if err := handleInstallationDeletedEvent(event, appId64); err != nil {
 					slog.Error("Failed to handle installation deleted event", "error", err)
@@ -79,7 +78,7 @@ func (d DiggerController) GithubAppWebHook(c *gin.Context) {
 					slog.Error("Failed to handle installation upsert event", "error", err)
 				}
 			}
-		}(c.Request.Context())
+		})
 	case *github.InstallationRepositoriesEvent:
 		slog.Info("Processing InstallationRepositoriesEvent",
 			"action", event.GetAction(),
@@ -89,22 +88,20 @@ func (d DiggerController) GithubAppWebHook(c *gin.Context) {
 		)
 
 		// Run in goroutine to avoid webhook timeouts for large installations
-		go func(ctx context.Context) {
-			defer logging.InheritRequestLogger(ctx)()
+		background.Go(c.Request.Context(), func(ctx context.Context) {
 			// Use background context so work continues after HTTP response
 			if err := handleInstallationRepositoriesEvent(context.Background(), gh, event, appId64); err != nil {
 				slog.Error("Failed to handle installation repositories event", "error", err)
 			}
-		}(c.Request.Context())
+		})
 	case *github.PushEvent:
 		slog.Info("Processing PushEvent",
 			"repo", *event.Repo.FullName,
 		)
 
-		go func(ctx context.Context) {
-			defer logging.InheritRequestLogger(ctx)()
+		background.Go(c.Request.Context(), func(ctx context.Context) {
 			handlePushEvent(ctx, gh, event, appId64)
-		}(c.Request.Context())
+		})
 
 	case *github.IssueCommentEvent:
 		slog.Info("Processing IssueCommentEvent",
@@ -113,10 +110,9 @@ func (d DiggerController) GithubAppWebHook(c *gin.Context) {
 			"issueNumber", *event.Issue.Number,
 		)
 
-		go func(ctx context.Context) {
-			defer logging.InheritRequestLogger(ctx)()
+		background.Go(c.Request.Context(), func(ctx context.Context) {
 			handleIssueCommentEvent(gh, event, d.CiBackendProvider, appId64, d.GithubWebhookPostIssueCommentHooks)
-		}(c.Request.Context())
+		})
 
 	case *github.PullRequestEvent:
 		slog.Info("Processing PullRequestEvent",
@@ -127,10 +123,9 @@ func (d DiggerController) GithubAppWebHook(c *gin.Context) {
 		)
 
 		// run it as a goroutine to avoid timeouts
-		go func(ctx context.Context) {
-			defer logging.InheritRequestLogger(ctx)()
+		background.Go(c.Request.Context(), func(ctx context.Context) {
 			handlePullRequestEvent(gh, event, d.CiBackendProvider, appId64)
-		}(c.Request.Context())
+		})
 
 	case *github.CheckRunEvent:
 		slog.Info("Processing CheckRunEvent",
@@ -152,10 +147,9 @@ func (d DiggerController) GithubAppWebHook(c *gin.Context) {
 
 		identifier := ra.Identifier
 		// run it as a goroutine to avoid timeouts
-		go func(ctx context.Context) {
-			defer logging.InheritRequestLogger(ctx)()
+		background.Go(c.Request.Context(), func(ctx context.Context) {
 			handleCheckRunActionEvent(gh, identifier, event, d.CiBackendProvider, appId64)
-		}(c.Request.Context())
+		})
 		slog.Info("Processing CheckRun requested_action", "identifier", identifier)
 	default:
 		slog.Debug("Unhandled event type", "eventType", reflect.TypeOf(event))

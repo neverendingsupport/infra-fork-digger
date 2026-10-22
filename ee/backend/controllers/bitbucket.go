@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
@@ -14,6 +15,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/diggerhq/digger/backend/background"
 	"github.com/diggerhq/digger/backend/ci_backends"
 	"github.com/diggerhq/digger/backend/controllers"
 	"github.com/diggerhq/digger/backend/locking"
@@ -118,7 +120,9 @@ func (ee DiggerEEController) BitbucketWebhookHandler(c *gin.Context) {
 			log.Printf("error parsing pullrequest:comment_created event: %v", err)
 			log.Printf("error parsing pullrequest:comment_created event: %v", err)
 		}
-		go handleIssueCommentEventBB(ee.BitbucketProvider, &pullRequestCommentCreated, ee.CiBackendProvider, orgId, &connectionEncrypted.ID, bitbucketAccessToken)
+		background.Go(c.Request.Context(), func(context.Context) {
+			handleIssueCommentEventBB(ee.BitbucketProvider, &pullRequestCommentCreated, ee.CiBackendProvider, orgId, &connectionEncrypted.ID, bitbucketAccessToken)
+		})
 	case "pullrequest:created":
 		err := json.Unmarshal(bodyBytes, &pullRequestCreated)
 		if err != nil {
