@@ -52,6 +52,8 @@ description: "Learn how to use Helm chart to install Digger on your Kubernetes c
   <Step title="Run more than one replica (optional)">
     With one replica, the backend can't answer webhooks or job callbacks while its pod restarts. To keep a pod serving through rollouts and node drains, run two replicas with a disruption budget. Add a short `preStop` sleep, so a stopping pod keeps serving while the Service stops sending it traffic.
 
+    Two replicas on one node still go down together if that node fails, so the example also asks the scheduler to spread them across nodes. A constraint without a `labelSelector` gets one that selects the backend pods. `matchLabelKeys` counts only pods from the same rollout, so a rollout's old pods don't push both new ones onto one node. `ScheduleAnyway` makes the spread a preference. When no other node can take a pod, such as during a drain on a two-node cluster, the pod still starts; `DoNotSchedule` would leave it Pending. `digger.topologySpreadConstraints` needs chart `0.1.12-nes.4`; older charts ignore it.
+
     The `sleep` hook needs Kubernetes 1.30 or later. On older clusters, use `exec: {command: ["sleep", "10"]}` instead.
 
     ```yaml values.yaml
@@ -63,6 +65,12 @@ description: "Learn how to use Helm chart to install Digger on your Kubernetes c
         preStop:
           sleep:
             seconds: 10
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          matchLabelKeys:
+            - pod-template-hash
     ```
 
     The budget defaults to `maxUnavailable: 1`, so a drain evicts one pod at a time and still works with one replica. Every replica runs the database migrations when it starts.
