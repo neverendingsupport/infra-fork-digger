@@ -3,7 +3,6 @@ package main
 import (
 	"crypto/fips140"
 	"embed"
-	"fmt"
 	"github.com/diggerhq/digger/backend/bootstrap"
 	"github.com/diggerhq/digger/backend/config"
 	ce_controllers "github.com/diggerhq/digger/backend/controllers"
@@ -109,7 +108,7 @@ func main() {
 	jobArtefactsGroup.GET("/", controllers.DownloadJobArtefact)
 
 	port := config.GetPort()
-	r.Run(fmt.Sprintf(":%d", port))
+	bootstrap.Serve(r, port)
 }
 
 func init() {

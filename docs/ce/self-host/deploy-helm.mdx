@@ -50,7 +50,7 @@ description: "Learn how to use Helm chart to install Digger on your Kubernetes c
   </Step>
 
   <Step title="Run more than one replica (optional)">
-    With one replica, the backend can't answer webhooks or job callbacks while its pod restarts. To keep a pod serving through rollouts and node drains, run two replicas with a disruption budget. Add a short `preStop` sleep, so a stopping pod keeps serving while the Service stops sending it traffic.
+    A rollout already starts the new pod before it stops the old one. A node drain or a crashed pod is different: with one replica, nothing answers webhooks or job callbacks until a replacement starts. To cover those, run two replicas with a disruption budget. Add a short `preStop` sleep, so a stopping pod keeps serving while the Service stops sending it traffic.
 
     The `sleep` hook needs Kubernetes 1.30 or later. On older clusters, use `exec: {command: ["sleep", "10"]}` instead.
 
@@ -67,9 +67,17 @@ description: "Learn how to use Helm chart to install Digger on your Kubernetes c
 
     The budget defaults to `maxUnavailable: 1`, so a drain evicts one pod at a time and still works with one replica. Every replica runs the database migrations when it starts.
 
-    <Note>
-      This doesn't make restarts lossless. The backend doesn't shut down gracefully yet, so a stopping pod runs until its termination grace period ends. Work that a request started in the background can be lost when the pod stops.
-    </Note>
+    After the `preStop` sleep, Kubernetes sends the backend SIGTERM. Since backend image `v0.1.7.32-nes.6`, the backend then stops accepting connections and waits for in-flight requests and the background work they started, such as webhook handling and check-run updates. It waits up to `DIGGER_SHUTDOWN_TIMEOUT`, a Go duration such as `30s`, which defaults to `15s`. Work still running when the timeout ends is lost.
+
+    Keep `digger.terminationGracePeriodSeconds` longer than the `preStop` sleep plus that timeout. The Kubernetes default of 30 seconds leaves 5 seconds to spare after a 10-second sleep. To allow more time, raise both:
+
+    ```yaml values.yaml
+    digger:
+      terminationGracePeriodSeconds: 60
+      customEnv:
+        - name: DIGGER_SHUTDOWN_TIMEOUT
+          value: "45s"
+    ```
 
     Since chart `0.1.12-nes.3`, the backend has a readiness probe on `/health`. The probe only starts after the startup probe passes. To remove it, set `digger.readinessProbe` to `null`. To use a different probe type, also set `digger.readinessProbe.httpGet` to `null`.
   </Step>

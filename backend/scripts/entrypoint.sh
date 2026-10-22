@@ -8,9 +8,9 @@ if [[ -z "${BASELINE_MIGRATION}" ]]; then
   else
     atlas migrate apply --url $DATABASE_URL
   fi
-  ./backend
+  exec ./backend
 else
   cd /app
   atlas migrate apply --url $DATABASE_URL --baseline $BASELINE_MIGRATION
-  ./backend
+  exec ./backend
 fi

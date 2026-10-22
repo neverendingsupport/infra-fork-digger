@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/diggerhq/digger/backend/background"
 	"github.com/diggerhq/digger/libs/digger_config/terragrunt/tac"
 	"github.com/diggerhq/digger/libs/git_utils"
 	"io"
@@ -15,7 +16,6 @@ import (
 	"path"
 	"strings"
 
-	"github.com/diggerhq/digger/backend/logging"
 	"github.com/diggerhq/digger/backend/models"
 	"github.com/diggerhq/digger/backend/utils"
 	dg_configuration "github.com/diggerhq/digger/libs/digger_config"
@@ -81,8 +81,7 @@ func (d DiggerController) UpdateRepoCache(c *gin.Context) {
 	var newAtlantisConfig *tac.AtlantisConfig
 
 	// update the cache here, do it async for immediate response
-	go func(ctx context.Context) {
-		defer logging.InheritRequestLogger(ctx)()
+	background.Go(c.Request.Context(), func(ctx context.Context) {
 		err = git_utils.CloneGitRepoAndDoActionWithConfig(cloneUrl, branch, "", *token, "", ghService.ReadRepositoryFile, func(dir string) error {
 			diggerYmlBytes, err := os.ReadFile(path.Join(dir, "digger.yml"))
 			diggerYmlStr = string(diggerYmlBytes)
@@ -104,7 +103,7 @@ func (d DiggerController) UpdateRepoCache(c *gin.Context) {
 			return
 		}
 		slog.Info("Successfully updated repo cache", "repoFullName", repoFullName, "orgId", orgId)
-	}(c.Request.Context())
+	})
 
 	c.String(http.StatusOK, "successfully submitted cache for processing, check backend logs for progress")
 }

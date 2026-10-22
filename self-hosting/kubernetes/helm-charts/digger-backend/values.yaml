@@ -88,7 +88,8 @@ digger:
   lifecycle: {}
 
   # Seconds to wait for a pod to stop, including any preStop sleep. Unset uses
-  # the Kubernetes default of 30.
+  # the Kubernetes default of 30. Keep it above the preStop sleep plus the
+  # backend's DIGGER_SHUTDOWN_TIMEOUT (15s by default).
   terminationGracePeriodSeconds: null
 
   # PodDisruptionBudget for the backend pods. maxUnavailable: 1 lets a drain
