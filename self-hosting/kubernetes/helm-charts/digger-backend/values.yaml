@@ -45,8 +45,9 @@ digger:
   #    cpu: 500m
   #    memory: 200Mi
 
-  # Number of backend pods. Run more than one, with podDisruptionBudget and a
-  # lifecycle preStop delay, so rollouts and node drains keep a pod serving.
+  # Number of backend pods. Run more than one, with podDisruptionBudget and
+  # topologySpreadConstraints, so a node drain or failure usually leaves a pod
+  # serving.
   replicaCount: 1
 
   # livenessProbe, startupProbe and readinessProbe settings
@@ -99,6 +100,18 @@ digger:
     enabled: false
     maxUnavailable: 1
     minAvailable: null
+
+  # Pod topologySpreadConstraints. A constraint without a labelSelector gets
+  # matchLabels {app: <chart name>-web}, which selects the backend pods; a
+  # labelSelector you set replaces it. matchLabelKeys keeps a rollout's old
+  # pods from counting against its new ones:
+  # topologySpreadConstraints:
+  #   - maxSkew: 1
+  #     topologyKey: kubernetes.io/hostname
+  #     whenUnsatisfiable: ScheduleAnyway
+  #     matchLabelKeys:
+  #       - pod-template-hash
+  topologySpreadConstraints: []
 
   # service values
   # type: service type (ClusterIP, LoadBalancer, etc)

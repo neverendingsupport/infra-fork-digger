@@ -35,6 +35,17 @@ spec:
       tolerations:
         {{- toYaml $.Values.digger.tolerations | nindent 8 }}
       {{- end }}
+      {{- with .Values.digger.topologySpreadConstraints }}
+      {{- $selector := dict "matchLabels" (dict "app" (printf "%s-web" (include "digger-backend.name" $))) }}
+      topologySpreadConstraints:
+        {{- range . }}
+        {{- $constraint := deepCopy . }}
+        {{- if not $constraint.labelSelector }}
+        {{- $_ := set $constraint "labelSelector" $selector }}
+        {{- end }}
+        - {{ toYaml $constraint | nindent 10 | trim }}
+        {{- end }}
+      {{- end }}
       containers:
       - name: web
         image: "{{ .Values.digger.image.repository }}:{{ .Values.digger.image.tag }}"
