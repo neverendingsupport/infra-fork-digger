@@ -188,7 +188,7 @@ func pullRequestEvent(action string) *github.PullRequestEvent {
 	}
 }
 
-func TestConvertGithubPullRequestEventToJobsReadyForReviewMatchesSynchronize(t *testing.T) {
+func TestConvertGithubPullRequestEventToJobsReadyForReview(t *testing.T) {
 	config := digger_config.DiggerConfig{
 		Workflows: map[string]digger_config.Workflow{
 			"default": {
@@ -208,4 +208,9 @@ func TestConvertGithubPullRequestEventToJobsReadyForReviewMatchesSynchronize(t *
 	require.Len(t, ready, 1)
 	assert.Equal(t, []string{"digger plan"}, ready[0].Commands)
 	assert.Equal(t, pushed, ready)
+
+	config.AllowDraftPRs = true
+	ready, _, err = ConvertGithubPullRequestEventToJobs(pullRequestEvent("ready_for_review"), projects, nil, config, false)
+	require.NoError(t, err)
+	assert.Empty(t, ready, "drafts were already planned on push")
 }

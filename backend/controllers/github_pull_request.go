@@ -173,7 +173,9 @@ func handlePullRequestEvent(gh utils.GithubClientProvider, payload *github.PullR
 		"configLength", len(diggerYmlStr),
 	)
 
-	// With draft PRs allowed, pushes to the draft were already planned.
+	// ConvertGithubPullRequestEventToJobs would build no jobs for this, but
+	// returning now skips impacted-project detection and the check updates
+	// that follow an empty job list.
 	if action == "ready_for_review" && config.AllowDraftPRs {
 		slog.Info("Ignoring ready_for_review, draft PRs are planned on push",
 			"prNumber", prNumber,
