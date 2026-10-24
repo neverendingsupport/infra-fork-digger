@@ -35,6 +35,10 @@ spec:
       tolerations:
         {{- toYaml $.Values.digger.tolerations | nindent 8 }}
       {{- end }}
+      {{- with .Values.digger.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.digger.topologySpreadConstraints }}
       {{- $selector := dict "matchLabels" (dict "app" (printf "%s-web" (include "digger-backend.name" $))) }}
       topologySpreadConstraints:

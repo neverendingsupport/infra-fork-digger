@@ -126,4 +126,5 @@ helm upgrade digger-backend ./digger-backend/
      - `digger.lifecycle` and `digger.terminationGracePeriodSeconds`
      - `digger.podDisruptionBudget`: `maxUnavailable: 1` by default; setting `minAvailable` replaces it
      - `digger.topologySpreadConstraints`: a constraint without a `labelSelector` selects the backend pods
+     - `digger.affinity`: passed through as given; it gets no injected selector
    - PostgreSQL config is under `digger.postgres`. The only connection-string setting is `databaseUrlSecretName`, which reads `DATABASE_URL` from a Secret; there is no plain `databaseURL` value

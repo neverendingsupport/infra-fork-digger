@@ -102,9 +102,9 @@ digger:
     minAvailable: null
 
   # Pod topologySpreadConstraints. A constraint without a labelSelector gets
-  # matchLabels {app: <chart name>-web}, which selects the backend pods; a
-  # labelSelector you set replaces it. matchLabelKeys keeps a rollout's old
-  # pods from counting against its new ones:
+  # matchLabels {app: <nameOverride or chart name>-web}, which selects the
+  # backend pods; a labelSelector you set replaces it. matchLabelKeys keeps a
+  # rollout's old pods from counting against its new ones:
   # topologySpreadConstraints:
   #   - maxSkew: 1
   #     topologyKey: kubernetes.io/hostname
@@ -112,6 +112,20 @@ digger:
   #     matchLabelKeys:
   #       - pod-template-hash
   topologySpreadConstraints: []
+
+  # Affinity rules for the backend pods, passed through as given. Unlike
+  # topologySpreadConstraints, no labelSelector is added. To keep backend pods
+  # on separate nodes (matchLabelKeys needs Kubernetes 1.31+):
+  # affinity:
+  #   podAntiAffinity:
+  #     requiredDuringSchedulingIgnoredDuringExecution:
+  #       - topologyKey: kubernetes.io/hostname
+  #         labelSelector:
+  #           matchLabels:
+  #             app: digger-backend-web  # <nameOverride>-web if set
+  #         matchLabelKeys:
+  #           - pod-template-hash
+  affinity: {}
 
   # service values
   # type: service type (ClusterIP, LoadBalancer, etc)
