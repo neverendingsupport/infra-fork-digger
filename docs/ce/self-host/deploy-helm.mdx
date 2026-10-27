@@ -9,23 +9,51 @@ description: "Learn how to use Helm chart to install Digger on your Kubernetes c
 - You have [kubectl](https://kubernetes.io/docs/reference/kubectl/kubectl/) installed and connected to your kubernetes cluster
 - A domain name for ingress configuration
 - A GitHub organization where you'll install the GitHub App
+- A Digger Enterprise Edition (EE) license key. This fork publishes only the EE backend, which sends `DIGGER_LICENSE_KEY` to Digger's license service at startup and exits if the check fails.
+- Outbound HTTPS from the backend pods to `europe-west2-prod-415611.cloudfunctions.net`, the license service. If egress is blocked, the backend exits at startup even with a valid key.
+- arm64 nodes. The image is built for arm64 only.
 
 <Steps>
   <Step title="Create Helm values">
     Create a `values.yaml` file. This will be used to configure settings for the Digger Helm chart.
-    To explore all configurable properties for your values file, visit the [values.yaml reference](https://github.com/diggerhq/digger/blob/develop/self-hosting/kubernetes/helm-charts/digger-backend/values.yaml).
+    To explore all configurable properties for your values file, visit the [values.yaml reference](https://github.com/neverendingsupport/infra-fork-digger/blob/nes-main/self-hosting/kubernetes/helm-charts/digger-backend/values.yaml).
   </Step>
 
   <Step title="Select Digger version">
-    By default, the Digger version set in your helm chart will likely be outdated.
-    Choose the latest Digger docker image tag from the [releases page](https://github.com/diggerhq/digger/releases).
-    
+    The chart's default image is upstream's, so point `digger.image` at this fork's build. The image and chart versions we run together are recorded in [`version.yaml` on `infra-prod`](https://github.com/neverendingsupport/infra-fork-digger/blob/infra-prod/version.yaml); use its image tag:
+
     ```yaml values.yaml
     digger:
       image:
-        repository: registry.digger.dev/diggerhq/digger_backend
-        tag: "v0.6.110" # Select tag from GitHub releases
+        repository: ghcr.io/neverendingsupport/infra-fork-digger/digger-backend-ee
+        tag: "v0.1.7.32-nes.8"
         pullPolicy: IfNotPresent
+      nodeSelector:
+        kubernetes.io/arch: arm64
+    ```
+
+    The `nodeSelector` keeps the pods off amd64 nodes, where the image can't start. On a cluster with only arm64 nodes, you can leave it out.
+
+    The EE backend reads its license key from `DIGGER_LICENSE_KEY`. Keep the key in a Secret in the release namespace. These bash commands prompt for the key, so it stays out of your shell history:
+
+    ```bash
+    kubectl create namespace digger
+    read -rsp 'Digger license key: ' DIGGER_LICENSE_KEY && echo
+    printf '%s' "$DIGGER_LICENSE_KEY" | kubectl create secret generic digger-license -n digger \
+      --from-file=DIGGER_LICENSE_KEY=/dev/stdin
+    unset DIGGER_LICENSE_KEY
+    ```
+
+    Then pass it to the backend:
+
+    ```yaml values.yaml
+    digger:
+      customEnv:
+        - name: DIGGER_LICENSE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: digger-license
+              key: DIGGER_LICENSE_KEY
     ```
     
     <Warning>
@@ -106,12 +134,17 @@ description: "Learn how to use Helm chart to install Digger on your Kubernetes c
 
     After the `preStop` sleep, Kubernetes sends the backend SIGTERM. Since backend image `v0.1.7.32-nes.6`, the backend then stops accepting connections and waits for in-flight requests and the background work they started, such as webhook handling and check-run updates. It waits up to `DIGGER_SHUTDOWN_TIMEOUT`, a Go duration such as `30s`, which defaults to `15s`. Work still running when the timeout ends is lost.
 
-    Keep `digger.terminationGracePeriodSeconds` longer than the `preStop` sleep plus that timeout. The Kubernetes default of 30 seconds leaves 5 seconds to spare after a 10-second sleep. To allow more time, raise both:
+    Keep `digger.terminationGracePeriodSeconds` longer than the `preStop` sleep plus that timeout. The Kubernetes default of 30 seconds leaves 5 seconds to spare after a 10-second sleep. To allow more time, raise both. `customEnv` is one list, so add the timeout next to the license key rather than replacing it:
 
     ```yaml values.yaml
     digger:
       terminationGracePeriodSeconds: 60
       customEnv:
+        - name: DIGGER_LICENSE_KEY
+          valueFrom:
+            secretKeyRef:
+              name: digger-license
+              key: DIGGER_LICENSE_KEY
         - name: DIGGER_SHUTDOWN_TIMEOUT
           value: "45s"
     ```
@@ -232,12 +265,15 @@ description: "Learn how to use Helm chart to install Digger on your Kubernetes c
     Once you are done configuring your `values.yaml` file, run the command below to install Digger:
     
     ```bash
-    helm install digger-backend oci://ghcr.io/diggerhq/helm-charts/digger-backend \
+    helm install digger-backend oci://ghcr.io/neverendingsupport/charts/digger-backend \
+      --version 0.1.12-nes.5 \
       --namespace digger \
       --create-namespace \
       --values values.yaml
     ```
     
+    Chart versions carry a `-nes.N` suffix, which Helm treats as a prerelease, and Helm skips prereleases unless you name one. So always pass `--version`, using the chart tag from [`version.yaml`](https://github.com/neverendingsupport/infra-fork-digger/blob/infra-prod/version.yaml). To see the newest published chart, run `helm show chart oci://ghcr.io/neverendingsupport/charts/digger-backend --devel`.
+
     Wait for all pods to reach a running state:
     
     ```bash
@@ -279,7 +315,8 @@ description: "Learn how to use Helm chart to install Digger on your Kubernetes c
     Then upgrade the Helm release:
     
     ```bash
-    helm upgrade digger-backend oci://ghcr.io/diggerhq/helm-charts/digger-backend \
+    helm upgrade digger-backend oci://ghcr.io/neverendingsupport/charts/digger-backend \
+      --version 0.1.12-nes.5 \
       --namespace digger \
       --values values.yaml
     ```

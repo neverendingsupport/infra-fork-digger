@@ -47,9 +47,9 @@ helm upgrade digger-backend ./digger-backend/
 
 ### CI/CD Workflows
 - **Pull Request Testing** (`.github/workflows/helm-test.yml`): Runs `helm unittest` and linting on PR changes to self-hosting/kubernetes/helm-charts/
-- **Release Process** (`.github/workflows/helm-release.yml`): On merge to **develop** branch (not main!), publishes to GitHub Container Registry at `oci://ghcr.io/diggerhq/helm-charts/digger-backend`
+- **Release Process**: In this fork, a `nes/backend-ee/v*` tag on `nes-main` runs `.github/workflows/nes-backend-ee-release.yml`, which publishes the chart to `oci://ghcr.io/neverendingsupport/charts/digger-backend`. Upstream's `helm-release.yml` publishes to `oci://ghcr.io/diggerhq/helm-charts/digger-backend` on merge to `develop`
 - **Installation**: Users install directly from OCI registry, not GitHub Pages
-- **Important**: This repo uses `develop` as the default branch, not `main`
+- **Important**: This fork's default branch is `nes-main`; `develop` tracks upstream
 
 ### Important Configuration Patterns
 
@@ -107,13 +107,13 @@ helm upgrade digger-backend ./digger-backend/
 
 2. **Publishing Strategy**: 
    - Charts are developed in the main repo but published to GitHub Container Registry (OCI)
-   - Users install from `oci://ghcr.io/diggerhq/helm-charts/digger-backend`
+   - Users of this fork install from `oci://ghcr.io/neverendingsupport/charts/digger-backend` with an explicit `--version`
    - No longer using separate helm-charts repository or GitHub Pages
 
 3. **Version Management**:
-   - Chart version is in `Chart.yaml` (e.g., `version: 0.1.12`)
-   - App version should match the digger backend version (e.g., `appVersion: "v0.6.106"`)
-   - Default image tag in `values.yaml` should typically match appVersion
+   - Chart version is in `Chart.yaml` as `<upstream>-nes.N` (e.g., `version: 0.1.12-nes.4`); the fork's release workflow rejects anything else
+   - Bump N whenever the chart changes, because a published version is reused only if its contents match
+   - `appVersion` and the default image in `values.yaml` are still upstream's; this fork's deploys set `digger.image` explicitly
 
 4. **Common Issues to Watch For**:
    - Configuration key names are case-sensitive (`githubAppID` not `githubAppId`)
