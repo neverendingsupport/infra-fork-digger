@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -47,10 +48,10 @@ func commandOriginPostgresDB(t *testing.T, migrate bool) *Database {
 	files, err := filepath.Glob(filepath.Join("..", "migrations", "*.sql"))
 	require.NoError(t, err)
 	require.NotEmpty(t, files)
-	require.Equal(t, commandOriginMigration, filepath.Base(files[len(files)-1]))
+	require.True(t, slices.ContainsFunc(files, func(f string) bool { return filepath.Base(f) == commandOriginMigration }))
 	for _, path := range files {
 		if filepath.Base(path) == commandOriginMigration && !migrate {
-			continue
+			break
 		}
 		commandOriginApplySQL(t, db.GormDB, path)
 	}
