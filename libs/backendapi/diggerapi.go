@@ -113,16 +113,19 @@ func (d DiggerApi) ReportProjectJobStatus(repo string, projectName string, jobId
 	}
 
 	workflowUrl := comment_utils.GetWorkflowUrl()
+	workflowRunID, workflowRunAttempt := comment_utils.GetWorkflowAttempt()
 	u.Path = filepath.Join(u.Path, "repos", repoNameForBackendReporting, "projects", projectName, "jobs", jobId, "set-status")
 	request := map[string]interface{}{
-		"status":             status,
-		"timestamp":          timestamp,
-		"job_summary":        planSummaryJson,
-		"job_plan_footprint": planFootprint.ToJson(),
-		"pr_comment_url":     PrCommentUrl,
-		"pr_comment_id":      PrCommentId,
-		"terraform_output":   terraformOutput,
-		"workflow_url":       workflowUrl,
+		"status":               status,
+		"timestamp":            timestamp,
+		"job_summary":          planSummaryJson,
+		"job_plan_footprint":   planFootprint.ToJson(),
+		"pr_comment_url":       PrCommentUrl,
+		"pr_comment_id":        PrCommentId,
+		"terraform_output":     terraformOutput,
+		"workflow_url":         workflowUrl,
+		"workflow_run_id":      workflowRunID,
+		"workflow_run_attempt": workflowRunAttempt,
 	}
 
 	jsonData, err := json.Marshal(request)

@@ -157,7 +157,6 @@ func handlePullRequestEvent(gh utils.GithubClientProvider, payload *github.PullR
 			}
 		}
 
-
 		slog.Error("Error getting Digger config for PR",
 			"prNumber", prNumber,
 			"repoFullName", repoFullName,
@@ -541,7 +540,7 @@ func handlePullRequestEvent(gh utils.GithubClientProvider, payload *github.PullR
 		impactedJobsMap[job.ProjectName] = jobsSlice[i]
 	}
 
-	batchId, _, err := utils.ConvertJobsToDiggerJobs(*diggerCommand, reporterType, models.DiggerVCSGithub, organisationId, impactedJobsMap, impactedProjectsMap, projectsGraph, installationId, branch, prNumber, repoOwner, repoName, repoFullName, commitSha, &commentId, diggerYmlStr, 0, aiSummaryCommentId, config.ReportTerraformOutputs, coverAllImpactedProjects, nil, batchCheckRunData, jobsCheckRunIdsMap)
+	batchId, _, err := utils.ConvertJobsToDiggerJobs(*diggerCommand, reporterType, models.DiggerVCSGithub, organisationId, impactedJobsMap, impactedProjectsMap, projectsGraph, installationId, branch, prNumber, repoOwner, repoName, repoFullName, commitSha, &commentId, diggerYmlStr, 0, aiSummaryCommentId, config.ReportTerraformOutputs, coverAllImpactedProjects, nil, batchCheckRunData, jobsCheckRunIdsMap, nil)
 	if err != nil {
 		slog.Error("Error converting jobs to Digger jobs",
 			"prNumber", prNumber,
@@ -566,7 +565,7 @@ func handlePullRequestEvent(gh utils.GithubClientProvider, payload *github.PullR
 		commentReporterManager.UpdateComment(fmt.Sprintf(":x: Could not retrieve created batch: %v", err))
 		return fmt.Errorf("error getting digger batch")
 	}
-	
+
 	if config.CommentRenderMode == digger_config.CommentRenderModeGroupByModule {
 		slog.Info("Using GroupByModule render mode for comments", "prNumber", prNumber)
 

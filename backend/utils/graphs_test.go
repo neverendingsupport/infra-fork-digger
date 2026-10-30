@@ -2,6 +2,7 @@ package utils
 
 import (
 	configuration "github.com/diggerhq/digger/libs/digger_config"
+	"reflect"
 	"testing"
 )
 
@@ -148,70 +149,53 @@ func TestImpactedProjectsOnlyGraph3(t *testing.T) {
 }
 
 func TestTraverseGraphVisitAllParentsFirst(t *testing.T) {
-	p1 := configuration.Project{Name: "root1"}
-	p2 := configuration.Project{Name: "root2"}
-	p3 := configuration.Project{Name: "root3"}
-	p4 := configuration.Project{Name: "root4"}
-	p5 := configuration.Project{Name: "child1", DependencyProjects: []string{"root1", "root2"}}
-	p6 := configuration.Project{Name: "child2", DependencyProjects: []string{"root1", "root2"}}
-	p7 := configuration.Project{Name: "child3", DependencyProjects: []string{"child1"}}
-	p8 := configuration.Project{Name: "child4", DependencyProjects: []string{"root4"}}
-	projects := []configuration.Project{p1, p2, p3, p4, p5, p6, p7, p8}
-
+	projects := []configuration.Project{
+		{Name: "a"}, {Name: "isolated"},
+		{Name: "b", DependencyProjects: []string{"a"}},
+		{Name: "d", DependencyProjects: []string{"b"}},
+		{Name: "c", DependencyProjects: []string{"a", "d"}},
+	}
 	dg, err := configuration.CreateProjectDependencyGraph(projects)
-
 	if err != nil {
-		t.Errorf("Error creating dependency graph: %v", err)
+		t.Fatal(err)
 	}
-
-	visitedOrder := make(map[string]int, 0)
-	order := 0
-	visit := func(value string) bool {
-		visitedOrder[value] = order
-		order++
-		return true
-	}
-
-	err = TraverseGraphVisitAllParentsFirst(dg, visit)
-
+	before, err := dg.AdjacencyMap()
 	if err != nil {
-		t.Errorf("Error traversing graph: %v", err)
+		t.Fatal(err)
 	}
-
-	if visitedOrder["root1"] > visitedOrder["child1"] {
-		t.Errorf("Expected root1 to be visited before child1")
+	visited := make(map[string]int)
+	err = TraverseGraphVisitAllParentsFirst(dg, func(value string) bool {
+		if _, found := visited[value]; found {
+			t.Fatalf("visited %s twice", value)
+		}
+		visited[value] = len(visited)
+		return false
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	if visitedOrder["root2"] > visitedOrder["child1"] {
-		t.Errorf("Expected root2 to be visited before child1")
+	if len(visited) != len(projects) {
+		t.Fatalf("visited %v, expected all %d projects", visited, len(projects))
 	}
-
-	if visitedOrder["root1"] > visitedOrder["child2"] {
-		t.Errorf("Expected root1 to be visited before child2")
+	for _, project := range projects {
+		for _, parent := range project.DependencyProjects {
+			if visited[parent] >= visited[project.Name] {
+				t.Errorf("parent %s must precede %s: %v", parent, project.Name, visited)
+			}
+		}
 	}
-
-	if visitedOrder["root2"] > visitedOrder["child2"] {
-		t.Errorf("Expected root2 to be visited before child2")
+	after, err := dg.AdjacencyMap()
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	if visitedOrder["child1"] > visitedOrder["child3"] {
-		t.Errorf("Expected child1 to be visited before child3")
+	if !reflect.DeepEqual(before, after) {
+		t.Fatal("traversal changed input graph")
 	}
-
-	if visitedOrder["child2"] > visitedOrder["child3"] {
-		t.Errorf("Expected child2 to be visited before child3")
+	calls := 0
+	if err := TraverseGraphVisitAllParentsFirst(dg, func(string) bool { calls++; return true }); err != nil {
+		t.Fatal(err)
 	}
-
-	if visitedOrder["root4"] > visitedOrder["child1"] {
-		t.Errorf("Expected root4 to be visited before child1")
-	}
-	if visitedOrder["root4"] > visitedOrder["child2"] {
-		t.Errorf("Expected root4 to be visited before child2")
-	}
-	if visitedOrder["root4"] > visitedOrder["child3"] {
-		t.Errorf("Expected root4 to be visited before child3")
-	}
-	if visitedOrder["root4"] > visitedOrder["child4"] {
-		t.Errorf("Expected root4 to be visited before child4")
+	if calls != 1 {
+		t.Fatalf("stop visitor called %d times", calls)
 	}
 }

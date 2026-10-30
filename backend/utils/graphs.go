@@ -14,7 +14,7 @@ import (
 )
 
 // ConvertJobsToDiggerJobs jobs is map with project name as a key and a Job as a value
-func ConvertJobsToDiggerJobs(jobType scheduler.DiggerCommand, jobReporterType string, vcsType models.DiggerVCSType, organisationId uint, jobsMap map[string]scheduler.Job, projectMap map[string]configuration.Project, projectsGraph graph.Graph[string, configuration.Project], githubInstallationId int64, branch string, prNumber int, repoOwner string, repoName string, repoFullName string, commitSha string, commentId *int64, diggerConfigStr string, gitlabProjectId int, aiSummaryCommentId string, reportTerraformOutput bool, coverAllImpactedProjects bool, VCSConnectionId *uint, batchCheckRunData *CheckRunData, jobsCheckRunIdsMap map[string]CheckRunData) (*uuid.UUID, map[string]*models.DiggerJob, error) {
+func ConvertJobsToDiggerJobs(jobType scheduler.DiggerCommand, jobReporterType string, vcsType models.DiggerVCSType, organisationId uint, jobsMap map[string]scheduler.Job, projectMap map[string]configuration.Project, projectsGraph graph.Graph[string, configuration.Project], githubInstallationId int64, branch string, prNumber int, repoOwner string, repoName string, repoFullName string, commitSha string, commentId *int64, diggerConfigStr string, gitlabProjectId int, aiSummaryCommentId string, reportTerraformOutput bool, coverAllImpactedProjects bool, VCSConnectionId *uint, batchCheckRunData *CheckRunData, jobsCheckRunIdsMap map[string]CheckRunData, origin *models.GitHubCommandSource) (*uuid.UUID, map[string]*models.DiggerJob, error) {
 	slog.Info("Converting jobs to Digger jobs",
 		"jobType", jobType,
 		"vcsType", vcsType,
@@ -84,6 +84,15 @@ func ConvertJobsToDiggerJobs(jobType scheduler.DiggerCommand, jobReporterType st
 	}
 
 	slog.Debug("Created batch", "batchId", batch.ID)
+	if origin != nil {
+		projects := make([]string, 0, len(jobsMap))
+		for project := range jobsMap {
+			projects = append(projects, project)
+		}
+		if err := models.DB.CreateBatchCommandOrigin(batch.ID, *origin, projects); err != nil {
+			return nil, nil, fmt.Errorf("record batch command origin: %w", err)
+		}
+	}
 
 	graphWithImpactedProjectsOnly, err := ImpactedProjectsOnlyGraph(projectsGraph, projectMap)
 	if err != nil {
@@ -97,101 +106,55 @@ func ConvertJobsToDiggerJobs(jobType scheduler.DiggerCommand, jobReporterType st
 		return nil, nil, err
 	}
 
+	var visitErr error
 	visit := func(value string) bool {
-		var jobCheckRunId *string = nil
-		var jobCheckRunUrl *string = nil
-		if jobsCheckRunIdsMap != nil {
-			if v, ok := jobsCheckRunIdsMap[value]; ok {
-				jobCheckRunId = &v.Id
-				jobCheckRunUrl = &v.Url
+		var checkID, checkURL *string
+		if check, ok := jobsCheckRunIdsMap[value]; ok {
+			checkID, checkURL = &check.Id, &check.Url
+		}
+		// A project is one job, even when it has several dependencies. Each
+		// dependency points to that same child so all parents gate its execution.
+		job, err := models.DB.CreateDiggerJob(batch.ID, marshalledJobsMap[value], projectMap[value].WorkflowFile, checkID, checkURL, jobReporterType, value)
+		if err != nil {
+			visitErr = fmt.Errorf("create project job %s: %w", value, err)
+			return true
+		}
+		if _, err := models.DB.CreateDiggerJobLink(job.DiggerJobID, repoFullName); err != nil {
+			visitErr = fmt.Errorf("link project job %s: %w", value, err)
+			return true
+		}
+		for _, edge := range predecessorMap[value] {
+			parent := result[edge.Source]
+			if parent == nil {
+				visitErr = fmt.Errorf("project %s has an uncreated parent %s", value, edge.Source)
+				return true
+			}
+			if err := models.DB.CreateDiggerJobParentLink(parent.DiggerJobID, job.DiggerJobID); err != nil {
+				visitErr = fmt.Errorf("link project dependency %s: %w", value, err)
+				return true
 			}
 		}
-		if predecessorMap[value] == nil || len(predecessorMap[value]) == 0 {
-			slog.Debug("Processing node with no parents", "projectName", value)
-			parentJob, err := models.DB.CreateDiggerJob(batch.ID, marshalledJobsMap[value], projectMap[value].WorkflowFile, jobCheckRunId, jobCheckRunUrl, jobReporterType, value)
-			if err != nil {
-				slog.Error("Failed to create job",
-					"projectName", value,
-					"batchId", batch.ID,
-					"error", err,
-				)
-				return false
-			}
-
-			_, err = models.DB.CreateDiggerJobLink(parentJob.DiggerJobID, repoFullName)
-			if err != nil {
-				slog.Error("Failed to create job link",
-					"jobId", parentJob.DiggerJobID,
-					"repoFullName", repoFullName,
-					"error", err,
-				)
-				return false
-			}
-
-			result[value] = parentJob
-			slog.Debug("Created job with no parents",
-				"projectName", value,
-				"jobId", parentJob.DiggerJobID,
-			)
-			return false
-		} else {
-			parents := predecessorMap[value]
-			slog.Debug("Processing node with parents",
-				"projectName", value,
-				"parentCount", len(parents),
-			)
-
-			for _, edge := range parents {
-				parent := edge.Source
-				parentDiggerJob := result[parent]
-
-				childJob, err := models.DB.CreateDiggerJob(batch.ID, marshalledJobsMap[value], projectMap[value].WorkflowFile, jobCheckRunId, jobCheckRunUrl, jobReporterType, value)
-				if err != nil {
-					slog.Error("Failed to create child job",
-						"projectName", value,
-						"parentProject", parent,
-						"batchId", batch.ID,
-						"error", err,
-					)
-					return false
-				}
-
-				_, err = models.DB.CreateDiggerJobLink(childJob.DiggerJobID, repoFullName)
-				if err != nil {
-					slog.Error("Failed to create job link",
-						"jobId", childJob.DiggerJobID,
-						"repoFullName", repoFullName,
-						"error", err,
-					)
-					return false
-				}
-
-				err = models.DB.CreateDiggerJobParentLink(parentDiggerJob.DiggerJobID, childJob.DiggerJobID)
-				if err != nil {
-					slog.Error("Failed to create job parent link",
-						"parentJobId", parentDiggerJob.DiggerJobID,
-						"childJobId", childJob.DiggerJobID,
-						"error", err,
-					)
-					return false
-				}
-
-				result[value] = childJob
-				slog.Debug("Created job with parent",
-					"projectName", value,
-					"jobId", childJob.DiggerJobID,
-					"parentProject", parent,
-					"parentJobId", parentDiggerJob.DiggerJobID,
-				)
-			}
-			return false
-		}
+		result[value] = job
+		slog.Debug("Created project job", "projectName", value, "jobId", job.DiggerJobID,
+			"batchId", batch.ID, "parentCount", len(predecessorMap[value]))
+		return false
 	}
 
 	err = TraverseGraphVisitAllParentsFirst(graphWithImpactedProjectsOnly, visit)
 	if err != nil {
 		slog.Error("Failed to traverse graph", "error", err)
 		return nil, nil, err
+	}
+
+	if visitErr != nil {
+		slog.Error("Failed to create project jobs", "batchId", batch.ID, "error", visitErr)
+		return nil, nil, visitErr
+	}
+
+	if origin != nil {
+		if err := models.DB.SealBatchCommandOrigin(batch.ID); err != nil {
+			return nil, nil, fmt.Errorf("verify batch command manifest: %w", err)
+		}
 	}
 
 	slog.Info("Successfully converted jobs to Digger jobs",
@@ -202,48 +165,20 @@ func ConvertJobsToDiggerJobs(jobType scheduler.DiggerCommand, jobReporterType st
 	return &batch.ID, result, nil
 }
 
+// TraverseGraphVisitAllParentsFirst visits each project after every dependency.
+// Returning true from visit stops traversal. The input graph is not modified.
 func TraverseGraphVisitAllParentsFirst(g graph.Graph[string, configuration.Project], visit func(value string) bool) error {
-	slog.Debug("Traversing graph, visiting all parents first")
-
-	// We need a dummy parent node that is ignored during traversal to ensure that all root nodes are visited first,
-	// otherwise when looking back at all parents of a node a parent might not be visited yet and we would miss it.
-	dummyParent := configuration.Project{Name: "DUMMY_PARENT_PROJECT_FOR_PROCESSING"}
-	predecessorMap, err := g.PredecessorMap()
+	order, err := graph.StableTopologicalSort(g, func(a, b string) bool { return a < b })
 	if err != nil {
-		slog.Error("Failed to get predecessor map", "error", err)
+		slog.Error("Failed to order project dependencies", "error", err)
 		return err
 	}
-
-	visitIgnoringDummyParent := func(value string) bool {
-		if value == dummyParent.Name {
-			return false
-		}
-		return visit(value)
-	}
-
-	err = g.AddVertex(dummyParent)
-	if err != nil {
-		slog.Error("Failed to add dummy parent vertex", "error", err)
-		return err
-	}
-
-	rootCount := 0
-	for node := range predecessorMap {
-		if predecessorMap[node] == nil || len(predecessorMap[node]) == 0 {
-			err := g.AddEdge(dummyParent.Name, node)
-			if err != nil {
-				slog.Error("Failed to add edge from dummy parent",
-					"node", node,
-					"error", err,
-				)
-				return err
-			}
-			rootCount++
+	for _, project := range order {
+		if visit(project) {
+			break
 		}
 	}
-
-	slog.Debug("Added dummy parent to root nodes", "rootNodeCount", rootCount)
-	return graph.BFS(g, dummyParent.Name, visitIgnoringDummyParent)
+	return nil
 }
 
 func ImpactedProjectsOnlyGraph(projectsGraph graph.Graph[string, configuration.Project], impactedProjectMap map[string]configuration.Project) (graph.Graph[string, configuration.Project], error) {
@@ -296,10 +231,8 @@ func CollapsedGraph(impactedParent *string, currentNode string, adjMap map[strin
 		}
 
 		err := g.AddVertex(currentProject)
-		if err != nil {
-			if errors.Is(err, graph.ErrVertexAlreadyExists) {
-				return nil
-			}
+		alreadyVisited := errors.Is(err, graph.ErrVertexAlreadyExists)
+		if err != nil && !alreadyVisited {
 			slog.Error("Failed to add vertex",
 				"projectName", currentNode,
 				"error", err,
@@ -309,18 +242,21 @@ func CollapsedGraph(impactedParent *string, currentNode string, adjMap map[strin
 
 		slog.Debug("Added impacted project to graph", "projectName", currentNode)
 
-		// process all children nodes
-		for child := range adjMap[currentNode] {
-			err := CollapsedGraph(&currentNode, child, adjMap, g, impactedProjects)
-			if err != nil {
-				return err
+		// Reaching an existing child through a second parent still adds that
+		// dependency. Its descendants have already been visited.
+		if !alreadyVisited {
+			for child := range adjMap[currentNode] {
+				err := CollapsedGraph(&currentNode, child, adjMap, g, impactedProjects)
+				if err != nil {
+					return err
+				}
 			}
 		}
 
 		// if there is an impacted parent add an edge
 		if impactedParent != nil {
 			err := g.AddEdge(*impactedParent, currentNode)
-			if err != nil {
+			if err != nil && !errors.Is(err, graph.ErrEdgeAlreadyExists) {
 				slog.Error("Failed to add edge",
 					"parent", *impactedParent,
 					"child", currentNode,
