@@ -10,6 +10,8 @@ title: "Orchestrator API"
 
 ## Authorization
 
+The policy routes below use admin or access tokens. The NES fork also provides [command provenance](./command-provenance) through the internal jobs API, which has separate credentials and organisation headers.
+
 Every request you make to the API must include a Bearer token for authorization. You can pass this token in the headers of your HTTP request with the key `Authorization` and the value `Bearer YOUR_TOKEN`.
 
 ```

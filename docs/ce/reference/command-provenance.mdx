@@ -1,0 +1,92 @@
+---
+title: "Command provenance"
+description: "Find the plan jobs created by a particular GitHub command."
+---
+
+The NES fork records which GitHub comment created a plan or apply batch. Queue controllers can use this record to distinguish a new recovery plan from an older successful plan on the same commit. A matching timestamp isn't enough to establish that relationship.
+
+## Read a command's jobs
+
+Use the existing internal jobs endpoint with both query parameters:
+
+```http
+GET /api/repos/42/jobs?source_comment_id=123456&pr_number=123
+Authorization: Bearer <internal-secret>
+DIGGER_ORG_ID: <external-organisation-id>
+DIGGER_ORG_SOURCE: <external-organisation-source>
+DIGGER_USER_ID: <reader-id>
+```
+
+`42` is Digger's repository database ID, available from `GET /api/repos/`. `source_comment_id` is the ID of the original `digger plan` or `digger apply` comment. It is not a report comment ID. Both query parameters must appear once and contain positive integers.
+
+These routes require `DIGGER_ENABLE_API_ENDPOINTS=true`. The bearer token must match `DIGGER_INTERNAL_SECRET`; it is different from a CLI job token. This shared credential can access other internal API operations. Restrict network access and keep it out of client applications. Repository ownership and the command's installation link are checked against the requested organisation.
+
+Requests without `source_comment_id` keep the existing jobs response. An opted-in response contains `repo` and `command_provenance`:
+
+```json
+{
+  "version": 1,
+  "complete": true,
+  "batches": [
+    {
+      "batch_id": "2dc334e0-fc70-4df6-adce-241dbe15dcc4",
+      "origin": {
+        "repository_id": 98765,
+        "repo_full_name": "example/infrastructure",
+        "pr_number": 123,
+        "source_comment_id": 123456,
+        "body_sha256": "<64-character SHA-256 digest>",
+        "commit_sha": "<PR head commit>",
+        "command": "plan"
+      },
+      "aggregate_check_id": "987600",
+      "manifest_complete": true,
+      "status": 4,
+      "jobs": [
+        {
+          "db_id": 321,
+          "job_id": "abcdef1234",
+          "project": "github-access",
+          "project_check_id": "987601",
+          "status": 5,
+          "workflow_url": "https://github.com/example/infrastructure/actions/runs/987602",
+          "workflow_run_id": 987602,
+          "workflow_run_attempt": 2
+        }
+      ]
+    }
+  ]
+}
+```
+
+The example shows the `command_provenance` object only. The endpoint excludes command text, Terraform output, serialized job specifications and job tokens from this object.
+
+## Interpret the result
+
+`complete` means the query returned all matching captured origins within its limits. It does not mean that a command ran successfully. An empty `batches` array provides no successful-plan evidence. Automatic plans and commands accepted by older backends have no captured origin; the API doesn't reconstruct one from report IDs or timestamps.
+
+Before creating jobs, the backend records the source comment ID, a SHA-256 hash of its accepted body, the PR head and the expected projects. It then seals a manifest of the batch's jobs before dispatching workflows. `manifest_complete` is true only when that sealed manifest still matches the batch and its full job set. A missing, extra, deleted or changed job makes it false. A crash during construction leaves an unsealed record, which also returns false.
+
+The API returns at most 20 batches per command and 500 jobs per batch. Exceeding either limit returns HTTP 413 rather than a truncated success. Invalid query parameters return HTTP 400; database failures return HTTP 500. Treat these responses as unavailable evidence.
+
+| Record | Status values |
+| --- | --- |
+| Batch | `1` created, `2` started, `3` failed, `4` succeeded, `5` invalidated |
+| Job | `1` created, `2` triggered, `3` failed, `4` started, `5` succeeded, `6` queued |
+| Unavailable or mismatched record | `0`, unknown |
+
+Updated CLI clients report `GITHUB_RUN_ID` and `GITHUB_RUN_ATTEMPT` with each job status. GitHub keeps the run ID across reruns and increments the attempt number; see its [variables reference](https://docs.github.com/en/actions/reference/workflows-and-actions/variables). Older clients and non-GitHub environments report zero for both fields. A workflow URL alone does not identify an attempt.
+
+## Use the evidence for recovery
+
+A queue controller must commit its recovery decision before creating a new plan comment, then persist the returned comment ID against that decision. It can query this endpoint to identify the resulting batch and jobs. Reusing an older comment or selecting the latest successful plan by time would lose that causal link.
+
+Before permitting an apply, the consumer must verify the source body, repository, PR and current head; require a complete successful plan; and check every reported workflow attempt against live GitHub state. It must also recheck its latest recovery decision at the apply boundary. These records describe execution history. They don't grant approval, prove that no other command is running, or make a lost GitHub response safe to retry.
+
+Duplicate deliveries can create several batches for one source comment. The API returns all captured batches and does not promise command deduplication. Consumers must account for every batch before treating a recovery plan as settled.
+
+## Upgrade and rollback
+
+Deploy the additive backend migration before using the new query. Upgrade the CLI used by plan workflows to obtain run and attempt IDs. A new backend with an older CLI can record command origins, but its jobs still have unknown attempts.
+
+Existing backend and CLI callers continue to use their original fields and response format. Rolling the backend back leaves the new table and columns in place; don't drop them during rollback. Origins are not backfilled. Keep automated recovery disabled until both producer and consumer have been qualified together.

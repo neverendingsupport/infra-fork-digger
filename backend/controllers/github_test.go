@@ -725,7 +725,7 @@ func TestJobsTreeWithOneJobsAndTwoProjects(t *testing.T) {
 	assert.NoError(t, err)
 
 	var commentId int64 = 123
-	_, result, err := utils.ConvertJobsToDiggerJobs("", "lazy", "github", 1, jobs, projectMap, graph, 41584295, "", 2, "diggerhq", "parallel_jobs_demo", "diggerhq/parallel_jobs_demo", "", &commentId, "test", 0, "", false, true, nil, nil, nil)
+	_, result, err := utils.ConvertJobsToDiggerJobs("", "lazy", "github", 1, jobs, projectMap, graph, 41584295, "", 2, "diggerhq", "parallel_jobs_demo", "diggerhq/parallel_jobs_demo", "", &commentId, "test", 0, "", false, true, nil, nil, nil, nil)
 
 	assert.NoError(t, err)
 	assert.Equal(t, 1, len(result))
@@ -756,7 +756,7 @@ func TestJobsTreeWithTwoDependantJobs(t *testing.T) {
 	projectMap["prod"] = project2
 
 	var commentId int64 = 123
-	_, result, err := utils.ConvertJobsToDiggerJobs("", "lazy", "github", 1, jobs, projectMap, graph, 123, "", 2, "", "", "test", "", &commentId, "test", 0, "", false, true, nil, nil, nil)
+	_, result, err := utils.ConvertJobsToDiggerJobs("", "lazy", "github", 1, jobs, projectMap, graph, 123, "", 2, "", "", "test", "", &commentId, "test", 0, "", false, true, nil, nil, nil, nil)
 
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(result))
@@ -791,7 +791,7 @@ func TestJobsTreeWithTwoIndependentJobs(t *testing.T) {
 	projectMap["prod"] = project2
 
 	var commentId int64 = 123
-	_, result, err := utils.ConvertJobsToDiggerJobs("", "lazy", "github", 1, jobs, projectMap, graph, 123, "", 2, "", "", "test", "", &commentId, "test", 0, "", false, true, nil, nil, nil)
+	_, result, err := utils.ConvertJobsToDiggerJobs("", "lazy", "github", 1, jobs, projectMap, graph, 123, "", 2, "", "", "test", "", &commentId, "test", 0, "", false, true, nil, nil, nil, nil)
 
 	assert.NoError(t, err)
 	assert.Equal(t, 2, len(result))
@@ -838,7 +838,7 @@ func TestJobsTreeWithThreeLevels(t *testing.T) {
 	projectMap["666"] = project6
 
 	var commentId int64 = 123
-	_, result, err := utils.ConvertJobsToDiggerJobs("", "lazy", "github", 1, jobs, projectMap, graph, 123, "", 2, "", "", "test", "", &commentId, "test", 0, "", false, true, nil, nil, nil)
+	_, result, err := utils.ConvertJobsToDiggerJobs("", "lazy", "github", 1, jobs, projectMap, graph, 123, "", 2, "", "", "test", "", &commentId, "test", 0, "", false, true, nil, nil, nil, nil)
 
 	assert.NoError(t, err)
 	assert.Equal(t, 6, len(result))
