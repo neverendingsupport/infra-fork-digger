@@ -582,19 +582,20 @@ runs:
         DIGGER_LOG_LEVEL: ${{ inputs.log-level }}
       run: |
         if [[ ${{ inputs.ee }} == "true" ]]; then
-          cd $GITHUB_ACTION_PATH/ee/cli
+          BUILD_DIR="$GITHUB_ACTION_PATH/ee/cli"
         else
-          cd $GITHUB_ACTION_PATH/cli
+          BUILD_DIR="$GITHUB_ACTION_PATH/cli"
         fi
+        cd "$BUILD_DIR"
         if [[ ${{ inputs.fips }} == "true" ]]; then
           export GODEBUG=fips140=only
           export GOFIPS140=v1.0.0
         fi        
         go build -o digger ./cmd/digger
         chmod +x digger
-        PATH=$PATH:$(pwd)
-        cd $GITHUB_WORKSPACE
-        digger
+        DIGGER_BIN="$(pwd)/digger"
+        cd "$GITHUB_WORKSPACE"
+        "$DIGGER_BIN"
 
     - name: download, install, and run digger
       if: ${{ steps.determine-binary-mode.outputs.binary-mode == 'prebuilt' }}

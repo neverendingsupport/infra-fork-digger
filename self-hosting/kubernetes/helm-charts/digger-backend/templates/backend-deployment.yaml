@@ -8,6 +8,14 @@ metadata:
   {{- end }}
 spec:
   replicas: {{ .Values.digger.replicaCount }}
+  {{- if not (has .Values.digger.updateStrategy (list "RollingUpdate" "Recreate")) }}
+  {{- fail "digger.updateStrategy must be RollingUpdate or Recreate" }}
+  {{- end }}
+  strategy:
+    type: {{ .Values.digger.updateStrategy }}
+    {{- if eq .Values.digger.updateStrategy "Recreate" }}
+    rollingUpdate: null
+    {{- end }}
   selector:
     matchLabels:
       app: {{ include "digger-backend.name" . }}-web

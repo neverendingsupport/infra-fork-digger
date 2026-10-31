@@ -342,7 +342,6 @@ func handleIssueCommentEvent(gh utils.GithubClientProvider, payload *github.Issu
 		"jobCount", len(jobs),
 	)
 
-
 	// impacted projects should have already been populated in the database by here since the PR open would have
 	// populated them, but just in case (disabled pr events or a long old pr before this change was deployed)
 	// we will populate them if they did not exist
@@ -595,7 +594,6 @@ func handleIssueCommentEvent(gh utils.GithubClientProvider, payload *github.Issu
 		slog.Debug("Created AI summary comment", "commentId", aiSummaryCommentId)
 	}
 
-
 	reporterType := "lazy"
 	if config.Reporting.CommentsEnabled == false {
 		reporterType = "noop"
@@ -607,7 +605,14 @@ func handleIssueCommentEvent(gh utils.GithubClientProvider, payload *github.Issu
 		"jobCount", len(impactedProjectsJobMap),
 	)
 
-	batchId, _, err := utils.ConvertJobsToDiggerJobs(*diggerCommand, reporterType, "github", orgId, impactedProjectsJobMap, impactedProjectsMap, projectsGraph, installationId, *prSourceBranch, issueNumber, repoOwner, repoName, repoFullName, *commitSha, &reporterCommentId, diggerYmlStr, 0, aiSummaryCommentId, config.ReportTerraformOutputs, coverAllImpactedProjects, nil, batchCheckRunData, jobCheckRunDataMap)
+	origin, err := githubCommandSource(payload)
+	if err != nil {
+		slog.Error("Could not record command source", "issueNumber", issueNumber,
+			"commentId", userCommentId, "error", err)
+		return fmt.Errorf("record GitHub command source: %w", err)
+	}
+
+	batchId, _, err := utils.ConvertJobsToDiggerJobs(*diggerCommand, reporterType, "github", orgId, impactedProjectsJobMap, impactedProjectsMap, projectsGraph, installationId, *prSourceBranch, issueNumber, repoOwner, repoName, repoFullName, *commitSha, &reporterCommentId, diggerYmlStr, 0, aiSummaryCommentId, config.ReportTerraformOutputs, coverAllImpactedProjects, nil, batchCheckRunData, jobCheckRunDataMap, origin)
 	if err != nil {
 		slog.Error("Error converting jobs to Digger jobs",
 			"issueNumber", issueNumber,
@@ -646,7 +651,6 @@ func handleIssueCommentEvent(gh utils.GithubClientProvider, payload *github.Issu
 			commentReporterManager.UpdateComment(fmt.Sprintf(":x: PostInitialSourceComments error: %v", err))
 			return fmt.Errorf("error posting initial comments")
 		}
-
 
 		batch.SourceDetails, err = json.Marshal(sourceDetails)
 		if err != nil {

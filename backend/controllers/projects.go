@@ -616,14 +616,16 @@ func RunHistoryForProject(c *gin.Context) {
 }
 
 type SetJobStatusRequest struct {
-	Status          string                      `json:"status"`
-	Timestamp       time.Time                   `json:"timestamp"`
-	JobSummary      *iac_utils.IacSummary       `json:"job_summary"`
-	Footprint       *iac_utils.IacPlanFootprint `json:"job_plan_footprint"`
-	PrCommentUrl    string                      `json:"pr_comment_url"`
-	PrCommentId     string                      `json:"pr_comment_id"`
-	TerraformOutput string                      `json:"terraform_output"`
-	WorkflowUrl     string                      `json:"workflow_url,omitempty"`
+	Status             string                      `json:"status"`
+	Timestamp          time.Time                   `json:"timestamp"`
+	JobSummary         *iac_utils.IacSummary       `json:"job_summary"`
+	Footprint          *iac_utils.IacPlanFootprint `json:"job_plan_footprint"`
+	PrCommentUrl       string                      `json:"pr_comment_url"`
+	PrCommentId        string                      `json:"pr_comment_id"`
+	TerraformOutput    string                      `json:"terraform_output"`
+	WorkflowUrl        string                      `json:"workflow_url,omitempty"`
+	WorkflowRunID      int64                       `json:"workflow_run_id,omitempty"`
+	WorkflowRunAttempt int64                       `json:"workflow_run_attempt,omitempty"`
 }
 
 func (d DiggerController) SetJobStatusForProject(c *gin.Context) {
@@ -685,6 +687,12 @@ func (d DiggerController) SetJobStatusForProject(c *gin.Context) {
 			"error", err,
 			"orgIsNil", org == nil)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Error fetching organisation"})
+		return
+	}
+
+	if err := recordWorkflowAttempt(job, request); err != nil {
+		slog.Warn("Invalid workflow attempt metadata", "jobDatabaseId", job.ID)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -1141,7 +1149,6 @@ func (d DiggerController) SetJobStatusForProject(c *gin.Context) {
 			slog.Debug("Successfully updated GitHub Check Run for job", "jobId", jobId)
 		}
 	})
-
 
 	if batch.ReportTerraformOutputs {
 		slog.Info("Generating Terraform outputs summary", "batchId", batch.ID)

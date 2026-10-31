@@ -3,6 +3,37 @@ templates:
   - backend-deployment.yaml
   - backend-pdb.yaml
 tests:
+  - it: should preserve rolling updates by default
+    template: backend-deployment.yaml
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: RollingUpdate
+      - notExists:
+          path: spec.strategy.rollingUpdate
+
+  - it: should remove rolling update options for a coordinated replacement
+    template: backend-deployment.yaml
+    set:
+      digger.updateStrategy: Recreate
+    asserts:
+      - equal:
+          path: spec.strategy.type
+          value: Recreate
+      - equal:
+          path: spec.strategy
+          value:
+            type: Recreate
+            rollingUpdate: null
+
+  - it: should reject an unsupported update strategy
+    template: backend-deployment.yaml
+    set:
+      digger.updateStrategy: Parallel
+    asserts:
+      - failedTemplate:
+          errorMessage: digger.updateStrategy must be RollingUpdate or Recreate
+
   - it: should keep one replica and add a readiness probe by default
     template: backend-deployment.yaml
     asserts:

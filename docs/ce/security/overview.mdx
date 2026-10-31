@@ -71,6 +71,8 @@ See [RBAC](/ce/state-management/rbac).
 
 ## Secret handling
 
+The NES [command provenance API](/ce/reference/command-provenance) returns command and job identities without Terraform output or serialized credentials. Its internal API secret remains broadly privileged; keep callers behind network restrictions. A CLI job token can report an attempt only for its own job. Consumers still need live GitHub verification before using reported attempts for recovery, and the provenance response never replaces apply authorization.
+
 Prevent sensitive values from appearing in Terraform plan output and PR comments using `filter_regex`:
 
 ```yaml

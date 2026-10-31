@@ -88,11 +88,16 @@ type DiggerJob struct {
 	SerializedVariablesSpec      []byte
 	TerraformOutput              string
 	// represents a footprint of terraform plan json for similarity checks
-	PlanFootprint   []byte
-	WorkflowFile    string
-	WorkflowRunUrl  *string
-	StatusUpdatedAt time.Time
-	ReporterType string `gorm:"default:'lazy'"` // temporary, to be replaced by SerializedReporterSpec
+	PlanFootprint      []byte
+	WorkflowFile       string
+	WorkflowRunUrl     *string
+	WorkflowRunID      int64
+	WorkflowRunAttempt int64
+	// Written only by ClaimDiggerJobDispatch. Status reports and stale whole-row
+	// saves must not erase permission already consumed by a possible dispatch.
+	WorkflowDispatchStartedAt *time.Time `gorm:"<-:false"`
+	StatusUpdatedAt           time.Time
+	ReporterType              string `gorm:"default:'lazy'"` // temporary, to be replaced by SerializedReporterSpec
 }
 
 type DiggerJobSummary struct {
@@ -259,9 +264,9 @@ func GetCheckRunConclusionForJob(job *DiggerJob) (string, error) {
 		return "failure", nil
 	}
 	slog.Error("Unknown job status in GetCheckRunConclusionForJob - this will cause GitHub API 422 error",
-	"jobId", job.DiggerJobID,
-	"jobStatus", job.Status,
-	"jobStatusInt", int(job.Status),
-	"validStatuses", []string{"created", "triggered", "started", "queued_for_run", "succeeded", "failed"})
+		"jobId", job.DiggerJobID,
+		"jobStatus", job.Status,
+		"jobStatusInt", int(job.Status),
+		"validStatuses", []string{"created", "triggered", "started", "queued_for_run", "succeeded", "failed"})
 	return "", fmt.Errorf("unknown job status: %v", job.Status)
 }

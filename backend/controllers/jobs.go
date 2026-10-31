@@ -43,6 +43,10 @@ func GetJobsForRepoApi(c *gin.Context) {
 		c.String(http.StatusInternalServerError, "Unknown error occurred while fetching jobs from database")
 		return
 	}
+	if c.Request.URL.Query().Has("source_comment_id") {
+		getCommandProvenance(c, org.ID, repo)
+		return
+	}
 
 	jobsRes, err := models.DB.GetJobsByRepoName(org.ID, repo.RepoFullName)
 	if err != nil {

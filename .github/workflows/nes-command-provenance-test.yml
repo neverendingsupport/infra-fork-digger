@@ -1,0 +1,49 @@
+name: NES command provenance
+
+on:
+  pull_request:
+    branches: [nes-main]
+  push:
+    branches: [nes-main]
+
+permissions:
+  contents: read
+
+jobs:
+  postgres:
+    name: PostgreSQL command and dispatch contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: local-qualification
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      GOWORK: off
+      DIGGER_COMMAND_ORIGIN_POSTGRES_DSN: postgres://postgres:local-qualification@localhost:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: 1.25.10
+          cache-dependency-path: |
+            backend/go.sum
+            libs/go.sum
+      - name: Verify database and scheduling contracts
+        working-directory: backend
+        run: go test -mod=readonly ./models ./services ./controllers
+      - name: Verify source-built action selects its compiled CLI
+        run: python3 scripts/test_action_source_build.py
+      - name: Build the EE CLI used by the source action
+        working-directory: ee/cli
+        env:
+          GOWORK: ${{ github.workspace }}/go.work
+        run: go build -mod=readonly -o "$RUNNER_TEMP/digger-ee" ./cmd/digger

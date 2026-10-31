@@ -25,6 +25,9 @@ jobs:
       - name: Check out code into the Go module directory
         uses: actions/checkout@v7
 
+      - name: Test source-build action CLI selection
+        run: python3 scripts/test_action_source_build.py
+
       - name: Deps
         run: |
           go get -v ./...
