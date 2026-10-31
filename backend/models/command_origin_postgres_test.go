@@ -170,14 +170,14 @@ func TestCommandOriginPostgresMigrationCompatibility(t *testing.T) {
 	var retained, added []commandOriginPGColumn
 	for _, column := range commandOriginPostgresColumns(t, db.GormDB, "public") {
 		if column.TableName == "batch_command_origins" ||
-			(column.TableName == "digger_jobs" && (column.ColumnName == "workflow_run_id" || column.ColumnName == "workflow_run_attempt")) {
+			(column.TableName == "digger_jobs" && (column.ColumnName == "workflow_run_id" || column.ColumnName == "workflow_run_attempt" || column.ColumnName == "workflow_dispatch_started_at")) {
 			added = append(added, column)
 		} else {
 			retained = append(retained, column)
 		}
 	}
 	require.Equal(t, before, retained, "upgrade must preserve every existing column and default")
-	require.Len(t, added, 15)
+	require.Len(t, added, 16)
 	var count int64
 	require.NoError(t, db.GormDB.Model(&BatchCommandOrigin{}).Count(&count).Error)
 	require.Zero(t, count, "legacy batches must not receive inferred origins")
@@ -198,7 +198,7 @@ func TestCommandOriginPostgresMigrationCompatibility(t *testing.T) {
 		var expected []commandOriginPGColumn
 		for _, column := range commandOriginPostgresColumns(t, tx, "command_origin_expected") {
 			if column.TableName == "batch_command_origins" ||
-				(column.TableName == "digger_jobs" && (column.ColumnName == "workflow_run_id" || column.ColumnName == "workflow_run_attempt")) {
+				(column.TableName == "digger_jobs" && (column.ColumnName == "workflow_run_id" || column.ColumnName == "workflow_run_attempt" || column.ColumnName == "workflow_dispatch_started_at")) {
 				expected = append(expected, column)
 			}
 		}

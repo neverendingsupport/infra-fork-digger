@@ -18,4 +18,4 @@ CREATE TABLE "public"."batch_command_origins" (
 -- Create index "idx_command_origin_source" to table: "batch_command_origins"
 CREATE INDEX "idx_command_origin_source" ON "public"."batch_command_origins" ("repo_full_name", "pr_number", "source_comment_id");
 -- Modify "digger_jobs" table
-ALTER TABLE "public"."digger_jobs" ADD COLUMN "workflow_run_id" bigint NULL, ADD COLUMN "workflow_run_attempt" bigint NULL;
+ALTER TABLE "public"."digger_jobs" ADD COLUMN "workflow_run_id" bigint NULL, ADD COLUMN "workflow_run_attempt" bigint NULL, ADD COLUMN "workflow_dispatch_started_at" timestamptz NULL;

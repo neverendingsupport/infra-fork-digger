@@ -50,6 +50,10 @@ digger:
   # serving.
   replicaCount: 1
 
+  # Use Recreate for a coordinated upgrade that cannot overlap old and new
+  # schedulers. This interrupts backend availability; drain workflows first.
+  updateStrategy: RollingUpdate
+
   # livenessProbe, startupProbe and readinessProbe settings
   # https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/
 

@@ -93,8 +93,11 @@ type DiggerJob struct {
 	WorkflowRunUrl     *string
 	WorkflowRunID      int64
 	WorkflowRunAttempt int64
-	StatusUpdatedAt    time.Time
-	ReporterType       string `gorm:"default:'lazy'"` // temporary, to be replaced by SerializedReporterSpec
+	// Written only by ClaimDiggerJobDispatch. Status reports and stale whole-row
+	// saves must not erase permission already consumed by a possible dispatch.
+	WorkflowDispatchStartedAt *time.Time `gorm:"<-:false"`
+	StatusUpdatedAt           time.Time
+	ReporterType              string `gorm:"default:'lazy'"` // temporary, to be replaced by SerializedReporterSpec
 }
 
 type DiggerJobSummary struct {

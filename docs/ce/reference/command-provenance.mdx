@@ -85,8 +85,33 @@ Before permitting an apply, the consumer must verify the source body, repository
 
 Duplicate deliveries can create several batches for one source comment. The API returns all captured batches and does not promise command deduplication. Consumers must account for every batch before treating a recovery plan as settled.
 
+## Workflow dispatch
+
+A project with several dependencies has one job shared by all of its parents. When the parents finish together, the backend commits a dispatch claim before calling GitHub. Only the caller that acquires that claim can send the workflow request. A late status report, including `created`, cannot erase the claim or permit another dispatch. Status reports still update the job's progress and workflow attempt.
+
+GitHub's [workflow dispatch API](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event) does not provide an idempotency key. If the backend loses the response, or stops after claiming the job but before sending it, the job remains claimed. Parent callbacks and the queued-job timer cannot send it again. Check GitHub Actions and the Digger job before starting a replacement command. If a workflow exists, use that run's status or rerun controls; if the outcome remains uncertain, leave the job pending for operator investigation. A new `digger plan` comment creates new jobs and does not clear the old claim.
+
+The ordinary jobs response does not expose the dispatch claim. An operator with read-only database access can inspect one exact job using `command_provenance.batches[].batch_id` and the corresponding `jobs[].job_id` from the opted-in response shown above. These require the `source_comment_id` and `pr_number` query; the ordinary jobs response does not contain them. Do not substitute `jobs[].db_id` for `job_id`. In `psql`, set those two variables to the observed values, then run:
+
+```sql
+SELECT digger_job_id, status, workflow_dispatch_started_at, workflow_run_url
+FROM digger_jobs
+WHERE batch_id = :'batch_id' AND digger_job_id = :'job_id';
+```
+
+A non-null `workflow_dispatch_started_at` means the backend consumed permission to send, even if the last status says `created`. It does not prove GitHub accepted the request. Correlate the job ID with the backend's `Workflow dispatch response unavailable; retaining claim` log and GitHub Actions. A null value on a legacy job does not prove it was never sent. This lookup does not reset the claim.
+
 ## Upgrade and rollback
 
 Deploy the additive backend migration before using the new query. Upgrade the CLI used by plan workflows to obtain run and attempt IDs. A new backend with an older CLI can record command origins, but its jobs still have unknown attempts.
 
-Existing backend and CLI callers continue to use their original fields and response format. Rolling the backend back leaves the new table and columns in place; don't drop them during rollback. Origins are not backfilled. Keep automated recovery disabled until both producer and consumer have been qualified together.
+Before enabling recovery plans, finish outstanding Digger workflows and stop the old backend replicas, then start the new replicas and verify the additive migration. Old schedulers do not honor dispatch claims, so do not overlap them with the new scheduler. Chart `0.1.12-nes.6` adds `digger.updateStrategy: Recreate` for this cutover; the default remains `RollingUpdate`. Configure `Recreate` in the same desired deployment that selects the new image, and verify every old pod has stopped before allowing new commands. [Kubernetes documents](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#recreate-deployment) that this strategy terminates old replicas before creating the new replicas during an upgrade. Coordinate this brief backend interruption with operators; GitHub delivery recovery must handle any webhooks missed during it. The new claim does not reconstruct whether a legacy job was dispatched before the upgrade.
+
+Existing backend and CLI callers continue to use their original fields and response format. Rolling the backend back leaves the new table and columns in place; don't drop them during rollback. Before starting an old scheduler, stop new command admission and verify that every possibly dispatched workflow has stopped and no unresolved dispatch claim remains. The old scheduler ignores those claims, including a claimed job whose last report says `created`; rolling back with such jobs pending could send them again. Origins are not backfilled. Keep automated recovery disabled until both producer and consumer have been qualified together.
+
+
+## Test the database contract
+
+The backend's ordinary tests skip PostgreSQL qualification unless `DIGGER_COMMAND_ORIGIN_POSTGRES_DSN` is set. Point it at a disposable PostgreSQL 16 instance with a role that can create databases, then run `go test -mod=readonly ./models ./services ./controllers` from `backend/` with `GOWORK=off`. Each database test creates its own database, applies the committed SQL migrations, and drops it afterward. Do not use a production connection.
+
+The `NES command provenance` GitHub Actions workflow supplies that database on pull requests to `nes-main`. It tests concurrent dispatch claims, migration compatibility, stale current and previous-version writers, complete command manifests, and the source-built action's CLI selection. Service tests also exercise simultaneous parent callbacks against a real HTTP workflow endpoint, a lost response, and completion that arrives before dispatch returns.

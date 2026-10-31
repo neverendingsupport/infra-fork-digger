@@ -93,6 +93,8 @@ description: "Learn how to use Helm chart to install Digger on your Kubernetes c
             - pod-template-hash
     ```
 
+    For an upgrade that cannot overlap old and new schedulers, chart `0.1.12-nes.6` adds `digger.updateStrategy: Recreate`. It stops the old replicas before starting replacements, so the backend is briefly unavailable. Keep the default `RollingUpdate` for ordinary upgrades. Follow the [command provenance upgrade procedure](/ce/reference/command-provenance#upgrade-and-rollback) when introducing dispatch claims.
+
     The budget defaults to `maxUnavailable: 1`, so a drain evicts one pod at a time and still works with one replica. Every replica runs the database migrations when it starts. `replicaCount` and `podDisruptionBudget` need chart `0.1.12-nes.3`; older charts ignore them. Add the `preStop` sleep from the next step too, so a pod that a drain evicts finishes its requests.
 
     Two replicas on one node still go down together if that node fails, so the example also asks the scheduler to spread them across nodes. A constraint without a `labelSelector` gets one that selects the backend pods. `matchLabelKeys` counts only pods from the same rollout, so a rollout's old pods don't push both new ones onto one node. `matchLabelKeys` in a spread constraint needs Kubernetes 1.27 or later. `digger.topologySpreadConstraints` needs chart `0.1.12-nes.4`; older charts ignore it.
