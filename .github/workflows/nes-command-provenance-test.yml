@@ -29,6 +29,7 @@ jobs:
     env:
       GOWORK: off
       DIGGER_COMMAND_ORIGIN_POSTGRES_DSN: postgres://postgres:local-qualification@localhost:5432/postgres?sslmode=disable
+      DIGGER_TEST_POSTGRES_URL: postgres://postgres:local-qualification@localhost:5432/postgres?sslmode=disable
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
@@ -40,6 +41,10 @@ jobs:
       - name: Verify database and scheduling contracts
         working-directory: backend
         run: go test -mod=readonly ./models ./services ./controllers
+      # A separate step, so its migrations don't race the models package's.
+      - name: Verify PR lock contracts
+        working-directory: backend
+        run: go test -mod=readonly ./locking
       - name: Verify source-built action selects its compiled CLI
         run: python3 scripts/test_action_source_build.py
       - name: Build the EE CLI used by the source action
