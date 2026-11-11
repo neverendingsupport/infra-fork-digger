@@ -64,6 +64,10 @@ func (c *commandOriginCI) TriggerWorkflow(job spec.Spec, _ string, _ string) err
 }
 
 func commandPipelineDB(t *testing.T, event *github.IssueCommentEvent) (*models.Database, models.Organisation, models.Repo) {
+	return commandPipelineDBFor(t, event.Repo.GetFullName(), event.Installation.GetID())
+}
+
+func commandPipelineDBFor(t *testing.T, repoFullName string, installationID int64) (*models.Database, models.Organisation, models.Repo) {
 	t.Helper()
 	gdb, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "pipeline.db")), &gorm.Config{})
 	require.NoError(t, err)
@@ -81,25 +85,28 @@ func commandPipelineDB(t *testing.T, event *github.IssueCommentEvent) (*models.D
 	t.Cleanup(func() { models.DB = previous; sqlDB, _ := gdb.DB(); _ = sqlDB.Close() })
 	org := models.Organisation{Name: "pipeline", ExternalId: "pipeline-id", ExternalSource: "test"}
 	require.NoError(t, gdb.Create(&org).Error)
-	repo := models.Repo{Name: "pipeline", RepoFullName: event.Repo.GetFullName(), OrganisationID: org.ID}
+	repo := models.Repo{Name: "pipeline", RepoFullName: repoFullName, OrganisationID: org.ID}
 	require.NoError(t, gdb.Create(&repo).Error)
-	_, err = db.CreateGithubInstallationLink(&org, event.Installation.GetID())
+	_, err = db.CreateGithubInstallationLink(&org, installationID)
 	require.NoError(t, err)
-	_, err = db.CreateGithubAppInstallation(event.Installation.GetID(), 1, "owner", 1, event.Repo.GetFullName())
+	_, err = db.CreateGithubAppInstallation(installationID, 1, "owner", 1, repoFullName)
 	require.NoError(t, err)
 	return db, org, repo
 }
 
-func commandPipelineCheckout(t *testing.T, config string) string {
+// commandPipelineCheckout returns the fixture's clone URL and its commit.
+func commandPipelineCheckout(t *testing.T, config string) (string, string) {
 	t.Helper()
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "digger.yml"), []byte(config), 0600))
 	require.NoError(t, os.Mkdir(filepath.Join(dir, "dev"), 0700))
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "dev", "main.tf"), []byte("# fixture\n"), 0600))
-	for _, args := range [][]string{{"init", "-b", "feature"}, {"add", "."}, {"-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-m", "fixture"}} {
+	var out []byte
+	for _, args := range [][]string{{"init", "-b", "feature"}, {"add", "."}, {"-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-m", "fixture"}, {"rev-parse", "HEAD"}} {
 		cmd := exec.Command("git", args...)
 		cmd.Dir = dir
-		out, err := cmd.CombinedOutput()
+		var err error
+		out, err = cmd.CombinedOutput()
 		require.NoError(t, err, "%s", out)
 	}
 	// Production cloning still runs, against a local fixture. No network request
@@ -107,7 +114,7 @@ func commandPipelineCheckout(t *testing.T, config string) string {
 	t.Setenv("GIT_CONFIG_COUNT", "1")
 	t.Setenv("GIT_CONFIG_KEY_0", "url.file://"+dir+".insteadOf")
 	t.Setenv("GIT_CONFIG_VALUE_0", "https://x-access-token:token@fixture.invalid/repo.git")
-	return "https://fixture.invalid/repo.git"
+	return "https://fixture.invalid/repo.git", strings.TrimSpace(string(out))
 }
 
 func TestCommandOriginSignedWebhookToSealedDispatchAndAPI(t *testing.T) {
@@ -137,7 +144,8 @@ func testCommandOriginPipeline(t *testing.T, config string, projects int, failur
 	t.Setenv("DIGGER_INTERNAL_SECRET", "test-internal-secret")
 	var event github.IssueCommentEvent
 	require.NoError(t, json.Unmarshal([]byte(issueCommentPayload), &event))
-	event.Repo.CloneURL = github.String(commandPipelineCheckout(t, config))
+	cloneURL, headSha := commandPipelineCheckout(t, config)
+	event.Repo.CloneURL = github.String(cloneURL)
 	event.Comment.Body = github.String("digger plan\n")
 	db, org, repo := commandPipelineDB(t, &event)
 	failureInjected := false
@@ -168,7 +176,7 @@ func testCommandOriginPipeline(t *testing.T, config string, projects int, failur
 		status, body := http.StatusOK, "{}"
 		switch {
 		case strings.HasSuffix(r.URL.Path, "/pulls/2"):
-			body = `{"number":2,"head":{"ref":"feature","sha":"head-sha"},"base":{"ref":"main","sha":"base-sha"},"merged":false}`
+			body = fmt.Sprintf(`{"number":2,"head":{"ref":"feature","sha":%q},"base":{"ref":"main","sha":"base-sha"},"merged":false}`, headSha)
 		case strings.HasSuffix(r.URL.Path, "/pulls/2/files"):
 			body = `[{"filename":"dev/main.tf"}]`
 		case strings.HasSuffix(r.URL.Path, "/pulls/2/merge"):
@@ -240,7 +248,7 @@ func testCommandOriginPipeline(t *testing.T, config string, projects int, failur
 	require.True(t, origin.Sealed)
 	require.Equal(t, event.Comment.GetID(), origin.SourceCommentID)
 	require.Equal(t, fmt.Sprintf("%x", sha256.Sum256([]byte(event.Comment.GetBody()))), origin.BodySHA256)
-	require.Equal(t, "head-sha", origin.CommitSHA)
+	require.Equal(t, headSha, origin.CommitSHA)
 	require.NotEqual(t, int64(9000), origin.SourceCommentID)
 
 	router := gin.New()

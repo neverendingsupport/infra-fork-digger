@@ -276,6 +276,7 @@ func run(command string, job orchestrator.Job, policyChecker policy.Checker, org
 		ProjectNamespace: projectNamespace,
 		ProjectName:      job.ProjectName,
 		PRNumber:         PRNumber,
+		Commit:           job.Commit,
 	}
 
 	diggerExecutor := execution.LockingExecutorWrapper{
@@ -718,6 +719,7 @@ func RunJob(
 			ProjectNamespace: repo,
 			ProjectName:      job.ProjectName,
 			PRNumber:         job.PullRequestNumber,
+			Commit:           job.Commit,
 		}
 
 		diggerExecutor := execution.DiggerExecutor{

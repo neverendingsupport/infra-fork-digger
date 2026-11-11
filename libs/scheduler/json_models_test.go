@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"fmt"
+	"github.com/diggerhq/digger/libs/digger_config"
 	"github.com/stretchr/testify/assert"
 	"reflect"
 	"slices"
@@ -23,7 +24,7 @@ func TestAllFieldsInJobJsonAreAlsoInJob(t *testing.T) {
 		jobFields = append(jobFields, jobVal.Type().Field(j).Name)
 	}
 
-	fieldsToIgnore := []string{"Commit", "Branch", "JobType", "AwsRoleRegion", "StateRoleName", "CommandRoleName", "StateRoleArn", "CommandRoleArn", "BackendHostname", "BackendOrganisationName", "BackendJobToken"}
+	fieldsToIgnore := []string{"Branch", "JobType", "AwsRoleRegion", "StateRoleName", "CommandRoleName", "StateRoleArn", "CommandRoleArn", "BackendHostname", "BackendOrganisationName", "BackendJobToken"}
 	for i := 0; i < nFieldsSpec; i++ {
 		field := specVal.Type().Field(i).Name
 		if slices.Contains(fieldsToIgnore, field) {
@@ -84,4 +85,9 @@ func TestIsApplyForDiggerApplyJobCorrect(t *testing.T) {
 	}
 	assert.True(t, j.IsApply())
 	assert.False(t, j.IsPlan())
+}
+
+func TestJsonToJobKeepsCommit(t *testing.T) {
+	spec := JobToJson(Job{ProjectName: "dev"}, DiggerCommandPlan, "org", "main", "bbb", "", "", digger_config.Project{})
+	assert.Equal(t, "bbb", JsonToJob(spec).Commit)
 }

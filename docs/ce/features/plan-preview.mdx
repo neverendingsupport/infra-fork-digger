@@ -10,7 +10,6 @@ Digger run report also contains other useful info e.g. results of policy checks.
 
 You can also re-plan by commenting `digger plan` (see [CommentOps](/ce/features/commentops)). Digger skips it while the same projects are still being planned on that commit; add `--force` to run it anyway (see [Repeated plan and apply comments](/ce/reference/comment-args#repeated-plan-and-apply-comments)).
 
-
 * The default way of working with digger is creating a pull request, previewing the plan within the PR as a comment, approving and applying the change within the change and then merging the pull request to the default branch
 
 * This guarantees that any pull request merged to the default branch reflects the infrastructure (since the apply will succeed before merging the pull request)
@@ -18,3 +17,13 @@ You can also re-plan by commenting `digger plan` (see [CommentOps](/ce/features/
 * By performing locks on pull request we guarantee that the plan preview on the pull request is not stale. i.e. the infrastructure was not touched by another subsequent change
 
 * Code in github: [https://github.com/diggerhq/digger/blob/5815775095d7380281c71c7c3aa63ca1b374365f/pkg/digger/digger.go#L228](https://github.com/diggerhq/digger/blob/5815775095d7380281c71c7c3aa63ca1b374365f/pkg/digger/digger.go#L228)
+
+## Which commit gets planned
+
+With the Digger backend on GitHub, an automatic plan runs only the commit its event was sent for, and only while that commit is still the PR's head. Digger loads `digger.yml` from that commit and attributes the plan to the person who triggered the event, so access policies never judge one person's commit as another's. If the PR has moved on, Digger leaves the newer commit to its own push event, which runs as whoever pushed it.
+
+Digger does read the PR's draft status from GitHub as it handles each event, not from the webhook. GitHub can send a push and a "ready for review" event at the same moment, and a push's webhook can still say the PR is a draft. When both events find the same commit, Digger plans it once, unless `DIGGER_DUPLICATE_COMMAND_WINDOW` is `0` (see [Repeated plan and apply comments](/ce/reference/comment-args#repeated-plan-and-apply-comments)). If a "ready for review" event arrives after the PR has moved on, Digger says so in a comment; if no plan of the new commit starts, comment `digger plan`.
+
+With the Digger backend on GitHub or GitLab, a plan or apply job checks the PR again before it checks out any code. If the PR has moved to a newer commit, the job fails, and its CI log names both commits. Digger plans the newer commit on its own when it's pushed, so a failed automatic plan needs nothing from you. For a comment or the Apply button on a check run, request it again for the new commit; rerunning the failed CI job repeats the old commit. Bitbucket jobs skip this check, because the Bitbucket integration doesn't pass a commit to the job.
+
+A job that started before the push finishes on its original commit and reports its result on that commit's checks, not the newer one's. If that leaves an apply half done, with some projects applied and their dependents stopped, plan the new commit and apply it.

@@ -133,6 +133,7 @@ func JsonToJob(jobJson JobJson) Job {
 		ApplyStage:                 jsonToStage(jobJson.ApplyStage),
 		PlanStage:                  jsonToStage(jobJson.PlanStage),
 		PullRequestNumber:          jobJson.PullRequestNumber,
+		Commit:                     jobJson.Commit,
 		EventName:                  jobJson.EventName,
 		RequestedBy:                jobJson.RequestedBy,
 		Namespace:                  jobJson.Namespace,

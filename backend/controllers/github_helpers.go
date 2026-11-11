@@ -637,7 +637,7 @@ func retrieveConfigFromCache(orgId uint, repoFullName string) (string, *digger_c
 var ErrBranchNotFoundPostMerge = errors.New("branch not found after PR merge")
 
 // handles post-merge branch not found 
-func GetDiggerConfigForBranchWithGracefulHandling(gh utils.GithubClientProvider, installationId int64, repoFullName string, repoOwner string, repoName string, cloneUrl string, branch string, isMerged bool, changedFiles []string, taConfig *tac.AtlantisConfig) (string, *github2.GithubService, *digger_config.DiggerConfig, graph.Graph[string, digger_config.Project], error) {
+func GetDiggerConfigForBranchWithGracefulHandling(gh utils.GithubClientProvider, installationId int64, repoFullName string, repoOwner string, repoName string, cloneUrl string, branch string, commitSha string, isMerged bool, changedFiles []string, taConfig *tac.AtlantisConfig) (string, *github2.GithubService, *digger_config.DiggerConfig, graph.Graph[string, digger_config.Project], error) {
 	slog.Info("Attempting to get Digger config for branch...",
 		"repoFullName", repoFullName,
 		"primaryBranch", branch,
@@ -666,7 +666,7 @@ func GetDiggerConfigForBranchWithGracefulHandling(gh utils.GithubClientProvider,
 		}
 	}
 
-	diggerYmlStr, ghService, config, dependencyGraph, err := GetDiggerConfigForBranchOrSha(gh, installationId, repoFullName, repoOwner, repoName, cloneUrl, branch, "", changedFiles, taConfig)
+	diggerYmlStr, ghService, config, dependencyGraph, err := GetDiggerConfigForBranchOrSha(gh, installationId, repoFullName, repoOwner, repoName, cloneUrl, branch, commitSha, changedFiles, taConfig)
 
 	if err != nil {
 		errMsg := err.Error()
@@ -811,10 +811,15 @@ func getDiggerConfigForPR(gh utils.GithubClientProvider, orgId uint, prLabels []
 		)
 	}
 
-	// get config 
+	// Load the config from the commit the jobs will run. A merged PR's branch
+	// can move on, so use its tip.
+	configSha := prCommitSha
+	if isMerged {
+		configSha = ""
+	}
 	diggerYmlStr, ghService, config, dependencyGraph, err := GetDiggerConfigForBranchWithGracefulHandling(
-		gh, installationId, repoFullName, repoOwner, repoName, cloneUrl, 
-		prBranch, isMerged, changedFiles, taConfig,
+		gh, installationId, repoFullName, repoOwner, repoName, cloneUrl,
+		prBranch, configSha, isMerged, changedFiles, taConfig,
 	)
 	if err != nil {
 		if errors.Is(err, ErrBranchNotFoundPostMerge) {

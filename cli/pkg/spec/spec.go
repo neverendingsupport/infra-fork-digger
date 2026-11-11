@@ -5,6 +5,7 @@ import (
 	"github.com/diggerhq/digger/cli/pkg/digger"
 	"github.com/diggerhq/digger/cli/pkg/usage"
 	backend2 "github.com/diggerhq/digger/libs/backendapi"
+	"github.com/diggerhq/digger/libs/ci"
 	comment_summary "github.com/diggerhq/digger/libs/comment_utils/summary"
 	"github.com/diggerhq/digger/libs/scheduler"
 	"github.com/diggerhq/digger/libs/spec"
@@ -12,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"regexp"
 	"time"
 )
 
@@ -22,6 +24,23 @@ func reportError(spec spec.Spec, backendApi backend2.Api, message string, err er
 		usage.ReportErrorAndExit(spec.VCS.RepoOwner, fmt.Sprintf("Failed to run commands. %v", err), 5)
 	}
 	usage.ReportErrorAndExit(spec.VCS.Actor, message, 1)
+}
+
+// The commit becomes a git argument and part of the stored plan's name.
+var commitPattern = regexp.MustCompile(`^[0-9a-f]{7,64}$`)
+
+// checkPullRequestHead fails a job whose PR moved past the commit the job was
+// created for, so it can't plan or apply code nobody requested.
+func checkPullRequestHead(prService ci.PullRequestService, prNumber int, commit string) error {
+	_, head, _, _, err := prService.GetBranchName(prNumber)
+	if err != nil {
+		return fmt.Errorf("could not read the head commit of PR #%d: %w", prNumber, err)
+	}
+	// Some VCS services don't report the head commit.
+	if head == "" || head == commit {
+		return nil
+	}
+	return fmt.Errorf("PR #%d is now at commit %s, but this job was created for commit %s. Run the Digger command again for the current head; rerunning this job reuses the old commit", prNumber, head, commit)
 }
 
 func RunSpec(
@@ -48,6 +67,22 @@ func RunSpec(
 	if diggerOutPath == "" {
 		diggerOutPath = os.Getenv("RUNNER_TEMP") + "/digger-out.log"
 		os.Setenv("DIGGER_OUT", diggerOutPath)
+	}
+
+	prService, err := vcsProvider.GetPrService(spec.VCS)
+	if err != nil {
+		message := fmt.Sprintf("could not get pr service: %v", err)
+		reportError(spec, backendApi, message, err)
+	}
+
+	if spec.Job.Commit != "" && !commitPattern.MatchString(spec.Job.Commit) {
+		err := fmt.Errorf("invalid commit %q in job spec", spec.Job.Commit)
+		reportError(spec, backendApi, err.Error(), err)
+	}
+	if spec.Job.Commit != "" && spec.Job.PullRequestNumber != nil {
+		if err := checkPullRequestHead(prService, *spec.Job.PullRequestNumber, spec.Job.Commit); err != nil {
+			reportError(spec, backendApi, err.Error(), err)
+		}
 	}
 
 	if spec.Job.Commit != "" {
@@ -84,12 +119,6 @@ func RunSpec(
 	lock, err := lockProvider.GetLock(spec.Lock)
 	if err != nil {
 		message := fmt.Sprintf("could not get lock provider: %v", err)
-		reportError(spec, backendApi, message, err)
-	}
-
-	prService, err := vcsProvider.GetPrService(spec.VCS)
-	if err != nil {
-		message := fmt.Sprintf("could not get pr service: %v", err)
 		reportError(spec, backendApi, message, err)
 	}
 

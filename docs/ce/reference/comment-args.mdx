@@ -65,6 +65,8 @@ digger apply --force
 
 Plan and apply comments on the same PR are checked one at a time. A comment that arrives while another is still starting waits for up to a minute; if it's still waiting then, Digger skips it and asks you to try again. Digger also skips a comment, and says so, if it can't run the check at all. Try again, or add `--force`.
 
+Automatic plans, started when a PR is opened or updated, get the same check. Digger skips one without commenting when every project is already being planned on that commit, which happens when a push and "ready for review" arrive together. If the check can't run, Digger plans anyway.
+
 The check only counts runs Digger queued in the last 2 hours. To change that, set `DIGGER_DUPLICATE_COMMAND_WINDOW` on the backend to a Go duration such as `30m`, or `0` to turn the check off. An invalid or negative value logs a warning and uses the default.
 
 Backendless mode and the GitLab and Bitbucket integrations don't check for repeated comments, and they ignore `--force`. In backendless mode, a GitHub Actions `concurrency` group on the workflow keeps two runs from overlapping.

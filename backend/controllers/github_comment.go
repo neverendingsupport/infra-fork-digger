@@ -438,7 +438,7 @@ func handleIssueCommentEvent(gh utils.GithubClientProvider, payload *github.Issu
 
 	commentParts, _, _ := generic.ParseDiggerCommentFlags(commentBody)
 	force := commentParts != nil && commentParts.Force
-	duplicateMsg, releaseCommandLock := guardDuplicateCommand(*diggerCommand, force, repoFullName, issueNumber, *commitSha, impactedProjectsForComment)
+	duplicateMsg, _, releaseCommandLock := guardDuplicateCommand(*diggerCommand, force, repoFullName, issueNumber, *commitSha, impactedProjectsForComment)
 	defer releaseCommandLock()
 	if duplicateMsg != "" {
 		commentReporterManager.UpdateComment(duplicateMsg)

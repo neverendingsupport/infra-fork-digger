@@ -100,7 +100,7 @@ func handleCheckRunActionEvent(gh utils.GithubClientProvider, identifier string,
 		})
 	})
 
-	duplicateMsg, releaseCommandLock := guardDuplicateCommand(scheduler.DiggerCommandApply, false, repoFullName, prNumber, commitSha, selectedProjects)
+	duplicateMsg, _, releaseCommandLock := guardDuplicateCommand(scheduler.DiggerCommandApply, false, repoFullName, prNumber, commitSha, selectedProjects)
 	defer releaseCommandLock()
 	if duplicateMsg != "" {
 		if _, err := ghService.PublishComment(prNumber, duplicateMsg); err != nil {

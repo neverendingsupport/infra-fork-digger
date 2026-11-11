@@ -44,8 +44,6 @@ func handlePullRequestEvent(gh utils.GithubClientProvider, payload *github.PullR
 	repoFullName := *payload.Repo.FullName
 	cloneURL := *payload.Repo.CloneURL
 	prNumber := *payload.PullRequest.Number
-	isDraft := payload.PullRequest.GetDraft()
-	commitSha := payload.PullRequest.Head.GetSHA()
 	branch := payload.PullRequest.Head.GetRef()
 	action := *payload.Action
 	labels := payload.PullRequest.Labels
@@ -68,8 +66,8 @@ func handlePullRequestEvent(gh utils.GithubClientProvider, payload *github.PullR
 		"prNumber", prNumber,
 		"action", action,
 		"branch", branch,
-		"commitSha", commitSha,
-		"isDraft", isDraft,
+		"eventCommitSha", payload.PullRequest.Head.GetSHA(),
+		"eventIsDraft", payload.PullRequest.GetDraft(),
 		"labels", prLabelsStr,
 		"installationId", installationId,
 	)
@@ -126,7 +124,7 @@ func handlePullRequestEvent(gh utils.GithubClientProvider, payload *github.PullR
 		return fmt.Errorf("error getting organisation")
 	}
 
-	diggerYmlStr, ghService, config, projectsGraph, _, _, changedFiles, err := getDiggerConfigForPR(gh, organisationId, prLabelsStr, installationId, repoFullName, repoOwner, repoName, cloneURL, prNumber)
+	diggerYmlStr, ghService, config, projectsGraph, _, configSha, changedFiles, err := getDiggerConfigForPR(gh, organisationId, prLabelsStr, installationId, repoFullName, repoOwner, repoName, cloneURL, prNumber)
 	if err != nil {
 		if errors.Is(err, ErrBranchNotFoundPostMerge) {
 			slog.Info("Branch deleted post-merge, no action needed",
@@ -180,6 +178,35 @@ func handlePullRequestEvent(gh utils.GithubClientProvider, payload *github.PullR
 		)
 		if os.Getenv("DIGGER_REPORT_BEFORE_LOADING_CONFIG") == "1" {
 			commentReporterManager.UpdateComment(":construction_worker: Ignoring ready for review, as draft PRs were already planned")
+		}
+		return nil
+	}
+
+	// GitHub can send a push and ready_for_review together, and a push's
+	// payload can still say draft, so read the draft state as it is now.
+	commitSha, isDraft, err := ghService.GetPullRequestHead(prNumber)
+	if err != nil {
+		slog.Error("Error getting PR head", "prNumber", prNumber, "error", err)
+		commentReporterManager.UpdateComment(fmt.Sprintf(":x: Error getting PR head: %v", err))
+		return fmt.Errorf("error getting PR head")
+	}
+	slog.Info("Using current PR head", "prNumber", prNumber, "commitSha", commitSha, "isDraft", isDraft)
+	// Run only the commit the sender acted on, with that commit's config, so
+	// policy never judges another pusher's commit as the sender's. A newer
+	// commit's own push event runs it as its pusher. Closing or converting to
+	// draft still releases the PR's locks, which no later event does.
+	eventSha := payload.PullRequest.Head.GetSHA()
+	if (commitSha != eventSha || commitSha != *configSha) && action != "closed" && action != "converted_to_draft" {
+		slog.Info("PR head moved since the event, skipping",
+			"prNumber", prNumber,
+			"eventCommitSha", eventSha,
+			"configCommitSha", *configSha,
+			"commitSha", commitSha,
+		)
+		// A push's event can be skipped as a draft before ready_for_review
+		// lands, so say how to plan the new head.
+		if action != "synchronize" && commitSha != eventSha {
+			commentReporterManager.UpdateComment(fmt.Sprintf(":information_source: This PR moved to %s after this `%s` event, so Digger left that commit to its own push event. If no plan of it starts, comment `digger plan`.", commitSha, action))
 		}
 		return nil
 	}
@@ -320,15 +347,19 @@ func handlePullRequestEvent(gh utils.GithubClientProvider, payload *github.PullR
 		return nil
 	}
 
-	// don't lock when a draft pull request is opened, or a commit to it is pushed
-	if !config.AllowDraftPRs && isDraft && (action == "opened" || action == "synchronize") {
-		slog.Info("Draft PRs are disabled, skipping PR",
+	if skipForDraftState(config.AllowDraftPRs, isDraft, action, *diggerCommand) {
+		slog.Info("Skipping PR for its draft state",
 			"prNumber", prNumber,
+			"action", action,
 			"isDraft", isDraft,
 		)
 		if os.Getenv("DIGGER_REPORT_BEFORE_LOADING_CONFIG") == "1" {
 			// This one is for aggregate reporting
-			commentReporterManager.UpdateComment(":construction_worker: Ignoring event as it is a draft and draft PRs are configured to be ignored")
+			msg := ":construction_worker: Ignoring event as it is a draft and draft PRs are configured to be ignored"
+			if !isDraft {
+				msg = ":construction_worker: Ignoring event as the PR is ready for review again"
+			}
+			commentReporterManager.UpdateComment(msg)
 		}
 		return nil
 	}
@@ -369,16 +400,23 @@ func handlePullRequestEvent(gh utils.GithubClientProvider, payload *github.PullR
 		return nil
 	}
 
-	if !config.AllowDraftPRs && isDraft {
-		slog.Info("Draft PRs are disabled, skipping PR",
-			"prNumber", prNumber,
-			"isDraft", isDraft,
-		)
-		if os.Getenv("DIGGER_REPORT_BEFORE_LOADING_CONFIG") == "1" {
-			// This one is for aggregate reporting
-			commentReporterManager.UpdateComment(":construction_worker: Ignoring event as it is a draft and draft PRs are configured to be ignored")
+	releaseCommandLock := func() {}
+	defer func() { releaseCommandLock() }()
+	if *diggerCommand == scheduler.DiggerCommandPlan {
+		// Plan a commit once when two events, e.g. a push and ready_for_review, find it.
+		var msg string
+		var duplicate bool
+		msg, duplicate, releaseCommandLock = guardDuplicateCommand(*diggerCommand, false, repoFullName, prNumber, commitSha, impactedProjects)
+		if duplicate {
+			slog.Info("Plan already running for this commit, skipping", "prNumber", prNumber, "commitSha", commitSha)
+			if os.Getenv("DIGGER_REPORT_BEFORE_LOADING_CONFIG") == "1" {
+				commentReporterManager.UpdateComment(msg)
+			}
+			return nil
 		}
-		return nil
+		if msg != "" {
+			slog.Warn("Couldn't check for a running plan, planning anyway", "prNumber", prNumber, "reason", msg)
+		}
 	}
 
 	// a pull request has led to jobs which would be triggered (ignoring closed event by here)
@@ -526,6 +564,8 @@ func handlePullRequestEvent(gh utils.GithubClientProvider, payload *github.PullR
 		commentReporterManager.UpdateComment(fmt.Sprintf(":x: ConvertJobsToDiggerJobs error: %v", err))
 		return fmt.Errorf("error converting jobs")
 	}
+
+	releaseCommandLock()
 
 	slog.Info("Successfully created batch for jobs",
 		"prNumber", prNumber,

@@ -331,7 +331,6 @@ func handleIssueCommentEvent(gitlabProvider utils.GitlabProvider, payload *gitla
 	commentId := payload.ObjectAttributes.ID
 	commentBody := payload.ObjectAttributes.Description
 	branch := payload.MergeRequest.SourceBranch
-	commitSha := payload.ObjectAttributes.CommitID
 	defaultBranch := payload.Repository.DefaultBranch
 	actor := payload.User.Username
 	discussionId := payload.ObjectAttributes.DiscussionID
@@ -382,7 +381,8 @@ func handleIssueCommentEvent(gitlabProvider utils.GitlabProvider, payload *gitla
 		return fmt.Errorf("unknown digger command in comment %v", err)
 	}
 
-	prBranchName, _, _, _, err := glService.GetBranchName(issueNumber)
+	// A note's commit is empty unless it's on a diff line; use the MR head.
+	prBranchName, commitSha, _, _, err := glService.GetBranchName(issueNumber)
 	if err != nil {
 		log.Printf("GetBranchName error: %v", err)
 		utils.InitCommentReporter(glService, issueNumber, fmt.Sprintf(":x: GetBranchName error: %v", err))

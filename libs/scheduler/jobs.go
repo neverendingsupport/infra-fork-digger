@@ -29,6 +29,7 @@ type Job struct {
 	ApplyStage                 *Stage
 	PlanStage                  *Stage
 	PullRequestNumber          *int
+	Commit                     string // set from a backend job spec; empty otherwise
 	EventName                  string
 	RequestedBy                string
 	Namespace                  string

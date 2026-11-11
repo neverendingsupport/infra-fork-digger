@@ -15,9 +15,11 @@ When a GitHub PR changes status from "draft" to "ready for review":
 - if `allow_draft_prs` is `false`, digger will run `on_pull_request_pushed` (`digger plan` by default), as if the PR had just been opened. With PR locks enabled, this takes the locks that converting to draft released.
 - if `allow_draft_prs` is `true`, digger will not plan again (because pushes to the draft were already planned)
 
+With the Digger backend, a push isn't skipped as a draft when you mark the PR ready at the same moment, because Digger checks the PR's draft status as it handles the push. See [Which commit gets planned](/ce/features/plan-preview#which-commit-gets-planned).
+
 ## Unlocking on changing back to draft
 
 When a PR changes status from "ready to review" back to "draft":
 
-- if `allow_draft_prs` is `false`, digger will release the lock
+- if `allow_draft_prs` is `false`, digger will release the lock, unless the PR is ready for review again by the time Digger handles the event
 - if `allow_draft_prs` is `true`, digger will not do anything (because it's considered a PR like any other)

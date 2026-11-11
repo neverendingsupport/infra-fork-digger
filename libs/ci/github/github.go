@@ -835,6 +835,15 @@ func (svc GithubService) GetBranchName(prNumber int) (string, string, string, st
 	return pr.Head.GetRef(), pr.Head.GetSHA(), targetBranch, targetSha, nil
 }
 
+// GetPullRequestHead returns the PR's head commit and draft state from one read.
+func (svc GithubService) GetPullRequestHead(prNumber int) (string, bool, error) {
+	pr, _, err := svc.Client.PullRequests.Get(context.Background(), svc.Owner, svc.RepoName, prNumber)
+	if err != nil {
+		return "", false, fmt.Errorf("error getting pull request: %v", err)
+	}
+	return pr.Head.GetSHA(), pr.GetDraft(), nil
+}
+
 func (svc GithubService) GetHeadCommitFromBranch(branch string) (string, string, error) {
 	branchInfo, _, err := svc.Client.Repositories.GetBranch(context.Background(), svc.Owner, svc.RepoName, branch, 0)
 	if err != nil {

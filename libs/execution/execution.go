@@ -146,20 +146,29 @@ type ProjectPathProvider struct {
 	ProjectPath      string
 	ProjectNamespace string
 	ProjectName      string
+	Commit           string
 }
 
 func (d ProjectPathProvider) ArtifactName() string {
+	// GitHub storage reads the newest artifact with this name, so another
+	// commit's plan mustn't share it.
+	if d.Commit != "" {
+		return d.ProjectName + "-" + d.Commit
+	}
 	return d.ProjectName
 }
 
 func (d ProjectPathProvider) StoredPlanFilePath() string {
+	name := strings.ReplaceAll(d.ProjectNamespace, "/", "-")
 	if d.PRNumber != nil {
-		prNumber := strconv.Itoa(*d.PRNumber)
-		return strings.ReplaceAll(d.ProjectNamespace, "/", "-") + "-" + prNumber + "-" + d.ProjectName + ".tfplan"
-	} else {
-		return strings.ReplaceAll(d.ProjectNamespace, "/", "-") + "-" + d.ProjectName + ".tfplan"
+		name += "-" + strconv.Itoa(*d.PRNumber)
 	}
-
+	name += "-" + d.ProjectName
+	// Keyed by commit, so apply can't pick up a plan of an older PR head.
+	if d.Commit != "" {
+		name += "-" + d.Commit
+	}
+	return name + ".tfplan"
 }
 
 func (d ProjectPathProvider) LocalPlanFilePath() string {
@@ -194,7 +203,7 @@ func (d DiggerExecutor) RetrievePlanJson() (string, error) {
 		return terraformPlanOutput, nil
 
 	} else {
-		return "", fmt.Errorf("stored plan does not exist")
+		return "", fmt.Errorf("stored plan %s does not exist, run digger plan for this commit first", planPathProvider.StoredPlanFilePath())
 	}
 }
 
@@ -368,7 +377,7 @@ func (d DiggerExecutor) Apply() (*iac_utils.IacSummary, bool, string, error) {
 		var err error
 		plansFilename, err = d.PlanStorage.RetrievePlan(d.PlanPathProvider.LocalPlanFilePath(), d.PlanPathProvider.ArtifactName(), d.PlanPathProvider.StoredPlanFilePath())
 		if err != nil {
-			return nil, false, "", fmt.Errorf("error retrieving plan: %v", err)
+			return nil, false, "", fmt.Errorf("error retrieving plan %s: %v", d.PlanPathProvider.StoredPlanFilePath(), err)
 		}
 	}
 

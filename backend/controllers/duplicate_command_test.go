@@ -33,12 +33,15 @@ func TestGuardDuplicateCommand(t *testing.T) {
 		require.NoError(t, err)
 	}
 
+	var duplicate bool
 	check := func(command scheduler.DiggerCommand, force bool, names ...string) string {
 		var projects []digger_config.Project
 		for _, n := range names {
 			projects = append(projects, digger_config.Project{Name: n})
 		}
-		msg, release := guardDuplicateCommand(command, force, "o/r", 7, sha, projects)
+		var msg string
+		var release func()
+		msg, duplicate, release = guardDuplicateCommand(command, force, "o/r", 7, sha, projects)
 		release()
 		return msg
 	}
@@ -46,6 +49,7 @@ func TestGuardDuplicateCommand(t *testing.T) {
 
 	assert.Equal(t, ":information_source: `digger plan` is already running on abcdef0123 for `alpha`, so this one was skipped. Add `--force` to a `digger plan` comment to run it anyway.",
 		check(plan, false, "alpha"))
+	assert.True(t, duplicate)
 	assert.Empty(t, check(plan, false, "alpha", "beta"), "a plan runs unless every project is being planned")
 	assert.Contains(t, check(apply, false, "alpha", "beta"), "for `beta`, so", "an apply stops if any project is being applied")
 	assert.Empty(t, check(apply, true, "alpha", "beta"), "--force runs anyway")
@@ -55,6 +59,7 @@ func TestGuardDuplicateCommand(t *testing.T) {
 	require.NoError(t, err)
 	models.DB = &models.Database{GormDB: broken}
 	assert.Contains(t, check(plan, false, "alpha"), ":x: Couldn't check", "a failed check skips the comment")
+	assert.False(t, duplicate, "a failed check isn't a duplicate")
 
 	t.Setenv("DIGGER_DUPLICATE_COMMAND_WINDOW", "0")
 	assert.Empty(t, check(plan, false, "alpha"), "check disabled")

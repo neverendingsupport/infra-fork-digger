@@ -180,6 +180,9 @@ func (gps *GithubPlanStorage) RetrievePlan(localPlanFilePath string, artifactNam
 			"outputPath", localPlanFilePath)
 		return nil, fmt.Errorf("error extracting plan: %v", err)
 	}
+	if plansFilename == "" {
+		return nil, fmt.Errorf("plan %s not found in the latest %s artifact", storedPlanFilePath, artifactName)
+	}
 
 	slog.Info("Successfully retrieved plan from GitHub artifacts",
 		"owner", gps.Owner,

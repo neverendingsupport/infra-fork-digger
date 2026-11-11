@@ -16,10 +16,6 @@ upload-plan-destination: github
     Github plan artifacts as a destination is currently deprecated due to a change in Github API. For more information see [this issue](https://github.com/diggerhq/digger/issues/1702).
 </Warning>
 
-<Alert>
-    sadfasdf
-</Alert>
-
 ### GCP 
 You can also configure plan outputs to be uploaded to GCP Buckets instead. This is handy in case you want your plan outputs to stay within your organisation's approved storage providers for security or compliance reasons.
 
@@ -52,3 +48,13 @@ with:
     upload-plan-destination: 'azure'
     upload-plan-destination-azure-storage-account: 'account_name'
     upload-plan-destination-azure-container: 'container_name'
+
+## How apply finds the stored plan
+
+With the Digger backend on GitHub or GitLab, a pull request's stored plan is named after the commit it was planned from, and `digger apply` only uses the plan of the commit it applies. If the PR gets a new commit after the plan, apply fails until that commit has been planned. Digger plans each push on its own, so wait for that plan, or comment `digger plan` if your workflow doesn't plan on push.
+
+<Warning>
+    Once you upgrade the Digger CLI (the GitHub Action, or the CLI image in your GitLab pipeline), it can't find plans that an earlier version stored, because their names don't include the commit. Run `digger plan` on open PRs before you apply them. Upgrade the backend first or at the same time: on GitLab, an older backend sends comment-triggered applies without a commit, so they can't find plans that a newer CLI stored. Upgrading only the backend doesn't change plan names.
+</Warning>
+
+Digger keeps one stored plan per commit and project, and doesn't delete the old ones. Plan files can contain secrets, so set a lifecycle or retention rule on the bucket or container, for example to expire plans after a few weeks.

@@ -105,3 +105,39 @@ func TestGitCommandFailureIsNotTimeout(t *testing.T) {
 		t.Fatalf("command stderr missing: %v", err)
 	}
 }
+
+func TestCloneFetchesCommitTheBranchMovedPast(t *testing.T) {
+	repo := t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", append([]string{"-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false"}, args...)...)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "-b", "feature")
+	for _, content := range []string{"old\n", "new\n"} {
+		if err := os.WriteFile(filepath.Join(repo, "digger.yml"), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+		git("add", ".")
+		git("commit", "-m", content)
+	}
+	old := git("rev-parse", "HEAD~1")
+
+	var got string
+	err := CloneGitRepoAndDoActionWithTimeout("file://"+repo, "feature", old, "", "", time.Minute, func(dir string) error {
+		b, err := os.ReadFile(filepath.Join(dir, "digger.yml"))
+		got = string(b)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "old\n" {
+		t.Fatalf("checked out %q, want the requested commit", got)
+	}
+}

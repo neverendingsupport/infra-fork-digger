@@ -214,3 +214,19 @@ func TestConvertGithubPullRequestEventToJobsReadyForReview(t *testing.T) {
 	require.NoError(t, err)
 	assert.Empty(t, ready, "drafts were already planned on push")
 }
+
+func TestGetPullRequestHeadReadsHeadAndDraftTogether(t *testing.T) {
+	mockedHTTPClient := mock.NewMockedHTTPClient(
+		mock.WithRequestMatch(
+			mock.GetReposPullsByOwnerByRepoByPullNumber,
+			github.PullRequest{Head: &github.PullRequestBranch{SHA: github.String("bbb")}, Draft: github.Bool(false)},
+		),
+	)
+	svc := GithubService{Client: github.NewClient(mockedHTTPClient), Owner: "diggerhq", RepoName: "digger"}
+
+	sha, draft, err := svc.GetPullRequestHead(7)
+
+	assert.NoError(t, err)
+	assert.Equal(t, "bbb", sha)
+	assert.False(t, draft)
+}

@@ -70,6 +70,14 @@ func CloneGitRepoAndDoActionWithTimeout(repoUrl string, branch string, commitHas
 	if commitHash != "" {
 		err := git.Checkout(commitHash)
 		if err != nil {
+			// The branch moved past the commit after we read it, so the shallow
+			// clone lacks it.
+			slog.Info("Commit not in clone, fetching it", "commitHash", commitHash)
+			if err = git.FetchCommit(commitHash); err == nil {
+				err = git.Checkout(commitHash)
+			}
+		}
+		if err != nil {
 			slog.Error("Failed to checkout commit",
 				"commitHash", commitHash,
 				"error", err,
@@ -192,6 +200,11 @@ func (g *GitShell) Checkout(branchOrCommit string) error {
 	args := []string{"checkout"}
 	args = append(args, branchOrCommit)
 	_, err := g.runCommand(args...)
+	return err
+}
+
+func (g *GitShell) FetchCommit(commit string) error {
+	_, err := g.runCommand("fetch", "--depth", "1", "origin", commit)
 	return err
 }
 
