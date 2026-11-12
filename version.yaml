@@ -5,23 +5,23 @@ promotion:
 images:
   default:
     repository: ghcr.io/neverendingsupport/infra-fork-digger/digger-backend-ee
-    tag: v0.1.7.32-nes.11
-    digest: sha256:4359e1b6671fe929d12ea6e89021eee689a896ab6cde9b8275854c453b9d22ac
+    tag: v0.1.7.32-nes.12
+    digest: sha256:7c0dc149b2642587fe40f1cc4f176f8f115e6b1d8a5d51e96b88ceeae9601bf1
     source:
       repository: neverendingsupport/infra-fork-digger
-      revision: 72913be5220c1fe424af49e9943ef780ac2478eb
+      revision: ecdb0cc60484255c424672744da79418cddc6268
     published:
-      at: '2026-11-12T09:09:35.403Z'
+      at: '2026-11-12T13:33:14.187Z'
       by: dannysauer
-      run: https://github.com/neverendingsupport/infra-fork-digger/actions/runs/43188535271
+      run: https://github.com/neverendingsupport/infra-fork-digger/actions/runs/43227799120
   chart:
     repository: ghcr.io/neverendingsupport/charts/digger-backend
     tag: 0.1.12-nes.6
     digest: sha256:6b52ec050a08e8baaecb7ff19487e4ab6b1d7647e9d0659b2d4f878a4144d4e5
     source:
       repository: neverendingsupport/infra-fork-digger
-      revision: 72913be5220c1fe424af49e9943ef780ac2478eb
+      revision: ecdb0cc60484255c424672744da79418cddc6268
     published:
-      at: '2026-11-12T09:09:35.403Z'
+      at: '2026-11-12T13:33:14.187Z'
       by: dannysauer
-      run: https://github.com/neverendingsupport/infra-fork-digger/actions/runs/43188535271
+      run: https://github.com/neverendingsupport/infra-fork-digger/actions/runs/43227799120
