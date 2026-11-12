@@ -93,11 +93,16 @@ type DiggerJob struct {
 	WorkflowRunUrl     *string
 	WorkflowRunID      int64
 	WorkflowRunAttempt int64
-	// Written only by ClaimDiggerJobDispatch. Status reports and stale whole-row
-	// saves must not erase permission already consumed by a possible dispatch.
+	// Written by dispatch claims and runner observations. Stale whole-row saves
+	// must not erase permission already consumed by a possible dispatch.
 	WorkflowDispatchStartedAt *time.Time `gorm:"<-:false"`
-	StatusUpdatedAt           time.Time
-	ReporterType              string `gorm:"default:'lazy'"` // temporary, to be replaced by SerializedReporterSpec
+	CallbackRevision          int64      `gorm:"not null;default:0;<-:false"`
+	// Version zero is legacy: absence of a dispatch claim is not historical proof.
+	DispatchProtocolVersion int        `gorm:"not null;default:0;<-:create"`
+	DependencyRetiredAt     *time.Time `gorm:"<-:false"`
+	DependencyFailureJobID  string     `gorm:"not null;default:'';<-:false"`
+	StatusUpdatedAt         time.Time
+	ReporterType            string `gorm:"default:'lazy'"` // temporary, to be replaced by SerializedReporterSpec
 }
 
 type DiggerJobSummary struct {
@@ -144,6 +149,7 @@ func (j *DiggerJob) MapToJsonStruct() (orchestrator_scheduler.SerializedJob, err
 
 	serialized := orchestrator_scheduler.SerializedJob{
 		DiggerJobId:      j.DiggerJobID,
+		SkipReason:       j.DependencySkipReason(),
 		Status:           j.Status,
 		JobString:        j.SerializedJobSpec,
 		PlanFootprint:    j.PlanFootprint,
@@ -249,6 +255,9 @@ func GetCheckRunStatusForJob(job *DiggerJob) (string, error) {
 }
 
 func GetCheckRunConclusionForJob(job *DiggerJob) (string, error) {
+	if job.DependencyRetiredAt != nil {
+		return "skipped", nil
+	}
 	switch job.Status {
 	case orchestrator_scheduler.DiggerJobStarted:
 		return "", nil
@@ -269,4 +278,12 @@ func GetCheckRunConclusionForJob(job *DiggerJob) (string, error) {
 		"jobStatusInt", int(job.Status),
 		"validStatuses", []string{"created", "triggered", "started", "queued_for_run", "succeeded", "failed"})
 	return "", fmt.Errorf("unknown job status: %v", job.Status)
+}
+
+// DependencySkipReason is display text, not a replacement for provenance proof.
+func (j *DiggerJob) DependencySkipReason() string {
+	if j.DependencyRetiredAt == nil {
+		return ""
+	}
+	return fmt.Sprintf("prerequisite `%s` failed; never dispatched", j.DependencyFailureJobID)
 }

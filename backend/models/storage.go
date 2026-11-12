@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/diggerhq/digger/backend/config"
 	"github.com/diggerhq/digger/libs/digger_config/terragrunt/tac"
 
 	"github.com/dchest/uniuri"
@@ -741,16 +742,16 @@ func (db *Database) MakeGithubAppInstallationLinkInactive(link *GithubAppInstall
 	return link, nil
 }
 
-func (db *Database) CreateImpactedProject(repoFullName string, commitSha string, projcectName string, branch *string, prNumber *int) (*ImpactedProject,error) {
+func (db *Database) CreateImpactedProject(repoFullName string, commitSha string, projcectName string, branch *string, prNumber *int) (*ImpactedProject, error) {
 	ip := ImpactedProject{
-		ID:          uuid.New(),
+		ID:           uuid.New(),
 		RepoFullName: repoFullName,
 		CommitSha:    commitSha,
 		ProjectName:  projcectName,
-		Branch: branch,
-		PrNumber: prNumber,
-		Planned: false,
-		Applied: false,
+		Branch:       branch,
+		PrNumber:     prNumber,
+		Planned:      false,
+		Applied:      false,
 	}
 	err := db.GormDB.Create(&ip).Error
 	if err != nil {
@@ -972,44 +973,29 @@ func (db *Database) UpdateDiggerBatch(batch *DiggerBatch) error {
 }
 
 func (db *Database) UpdateBatchStatus(batch *DiggerBatch) error {
-	if batch.Status == scheduler.BatchJobInvalidated || batch.Status == scheduler.BatchJobFailed || batch.Status == scheduler.BatchJobSucceeded {
-		return nil
+	result, err := db.ReconcileFailedDependencies(batch.ID)
+	if errors.Is(err, ErrProvenanceTooLarge) {
+		return db.updateLargeBatchStatus(batch)
 	}
-
-	batchId := batch.ID
-	var diggerJobs []DiggerJob
-	result := db.GormDB.Where("batch_id=?", batchId).Find(&diggerJobs)
-	if result.Error != nil {
-		if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
-			slog.Error("failed to get digger jobs by batch id",
-				"batchId", batchId,
-				"error", result.Error)
-		}
-		return result.Error
+	if err == nil {
+		batch.Status = result.BatchStatus
 	}
-
-	allJobsSucceeded := true
-	for _, job := range diggerJobs {
-		if job.Status != scheduler.DiggerJobSucceeded {
-			allJobsSucceeded = false
-		}
-	}
-	if allJobsSucceeded == true {
-		batch.Status = scheduler.BatchJobSucceeded
-		result := db.GormDB.Save(batch)
-		if result.Error != nil {
-			slog.Error("failed to update batch status", "batchId", batchId, "error", result.Error)
-		}
-		slog.Info("all jobs succeeded, marking batch as succeeded",
-			"batchId", batchId,
-			"jobCount", len(diggerJobs))
-	}
-	return nil
+	return err
 }
 
 func (db *Database) CreateDiggerJob(batchId uuid.UUID, serializedJob []byte, workflowFile string, checkRunId *string, checkRunUrl *string, reporterType string, projectName string) (*DiggerJob, error) {
 	if serializedJob == nil || len(serializedJob) == 0 {
 		return nil, fmt.Errorf("serializedJob can't be empty")
+	}
+	protocol := 0
+	if config.DependencyRetirementQualificationEnabled() {
+		var batch DiggerBatch
+		if err := db.GormDB.Select("vcs").First(&batch, "id = ?", batchId).Error; err != nil {
+			return nil, err
+		}
+		if batch.VCS == DiggerVCSGithub {
+			protocol = 1
+		}
 	}
 	jobId := uniuri.NewLen(10)
 	batchIdStr := batchId.String()
@@ -1022,17 +1008,18 @@ func (db *Database) CreateDiggerJob(batchId uuid.UUID, serializedJob []byte, wor
 
 	workflowUrl := "#"
 	job := &DiggerJob{
-		DiggerJobID: jobId,
-		Status: scheduler.DiggerJobCreated,
-		ProjectName: projectName,
-		BatchID: &batchIdStr,
-		CheckRunId: checkRunId,
-		CheckRunUrl: checkRunUrl,
-		SerializedJobSpec: serializedJob,
-		DiggerJobSummary: *summary,
-		WorkflowRunUrl: &workflowUrl,
-		WorkflowFile: workflowFile,
-		ReporterType: reporterType,
+		DispatchProtocolVersion: protocol,
+		DiggerJobID:             jobId,
+		Status:                  scheduler.DiggerJobCreated,
+		ProjectName:             projectName,
+		BatchID:                 &batchIdStr,
+		CheckRunId:              checkRunId,
+		CheckRunUrl:             checkRunUrl,
+		SerializedJobSpec:       serializedJob,
+		DiggerJobSummary:        *summary,
+		WorkflowRunUrl:          &workflowUrl,
+		WorkflowFile:            workflowFile,
+		ReporterType:            reporterType,
 	}
 	result = db.GormDB.Save(job)
 	if result.Error != nil {
@@ -1233,6 +1220,7 @@ func (db *Database) GetFirstRunQueueForEveryProject() ([]DiggerRunQueueItem, err
     ROW_NUMBER() OVER (PARTITION BY digger_run_queue_items.project_id ORDER BY digger_run_queue_items.created_at  ASC) AS QueuePosition
   FROM
     digger_run_queue_items
+  WHERE digger_run_queue_items.deleted_at IS NULL
 )
 SELECT
   RankedRuns.digger_run_id ,
@@ -1310,13 +1298,25 @@ func (db *Database) UpdateDiggerJobSummary(diggerJobId string, resourcesCreated 
 }
 
 func (db *Database) UpdateDiggerJob(job *DiggerJob) error {
-	result := db.GormDB.Save(job)
+	// Save's update-then-insert fallback must never reopen a retired row.
+	result := db.GormDB.Model(job).Where("dependency_retired_at IS NULL AND callback_revision = ?", job.CallbackRevision).
+		Select("*").Omit("Batch", "DiggerJobSummary").Updates(job)
 	if result.Error != nil {
 		slog.Error("failed to update digger job",
 			"diggerJobId", job.DiggerJobID,
 			"id", job.ID,
 			"error", result.Error)
 		return result.Error
+	}
+	if result.RowsAffected != 1 {
+		var current DiggerJob
+		if err := db.GormDB.First(&current, job.ID).Error; err != nil {
+			return err
+		}
+		if current.DependencyRetiredAt != nil {
+			return ErrDiggerJobRetired
+		}
+		return ErrDiggerJobTransitionConflict
 	}
 	slog.Info("digger job updated successfully",
 		"diggerJobId", job.DiggerJobID,

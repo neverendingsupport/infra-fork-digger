@@ -302,7 +302,7 @@ func testCommandOriginPipeline(t *testing.T, config string, projects int, failur
 		{"other job", otherToken.Value, workflow, 404, 2, http.StatusForbidden},
 		{"wrong run", job.Job.BackendJobToken, workflow, 405, 2, http.StatusBadRequest},
 		{"current attempt", job.Job.BackendJobToken, workflow, 404, 2, http.StatusOK},
-		{"legacy report", job.Job.BackendJobToken, workflow, 0, 0, http.StatusOK},
+		{"legacy report", job.Job.BackendJobToken, workflow, 0, 0, http.StatusConflict},
 	} {
 		body, err := json.Marshal(SetJobStatusRequest{Status: "started", WorkflowUrl: tc.url, WorkflowRunID: tc.run, WorkflowRunAttempt: tc.attempt})
 		require.NoError(t, err)
@@ -317,7 +317,10 @@ func testCommandOriginPipeline(t *testing.T, config string, projects int, failur
 		require.Equal(t, tc.wantStatus, w.Code, "%s: %s", tc.name, w.Body.String())
 		stored, err := db.GetDiggerJob(job.JobId)
 		require.NoError(t, err)
-		if tc.wantStatus == http.StatusOK {
+		if tc.name == "legacy report" {
+			require.Equal(t, int64(404), stored.WorkflowRunID)
+			require.Equal(t, int64(2), stored.WorkflowRunAttempt)
+		} else if tc.wantStatus == http.StatusOK {
 			require.Equal(t, tc.run, stored.WorkflowRunID)
 			require.Equal(t, tc.attempt, stored.WorkflowRunAttempt)
 			require.Equal(t, tc.url, *stored.WorkflowRunUrl)

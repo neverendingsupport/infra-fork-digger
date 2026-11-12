@@ -44,6 +44,10 @@ func (b BasicCommentUpdater) UpdateComment(jobs []scheduler.SerializedJob, prNum
 	message = message + fmt.Sprintf("|---------|--------|------|---|---|---|\n")
 
 	for _, job := range jobs {
+		if job.SkipReason != "" {
+			message += fmt.Sprintf("|:no_entry_sign: **%s** |skipped: %s | %s | 0 | 0 | 0|\n", scheduler.GetProjectAlias(job), job.SkipReason, jobTypeTitle)
+			continue
+		}
 		prCommentUrl := job.PRCommentUrl
 
 		// Safe handling of WorkflowRunUrl pointer

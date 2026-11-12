@@ -7,6 +7,12 @@ import (
 	"time"
 )
 
+// DependencyRetirementQualificationEnabled only controls newly created markers.
+// Operators enable it after all applicable senders have completed their cutover.
+func DependencyRetirementQualificationEnabled() bool {
+	return DiggerConfig.GetBool("dependency_retirement_qualification_enabled")
+}
+
 func LimitByNumOfFilesChanged() bool {
 	// if this flag is set then it will fail if there are more projects impacted than the
 	// number of files changed

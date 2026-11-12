@@ -95,6 +95,7 @@ func (d *DiggerJobStatus) ToEmoji() string {
 }
 
 type SerializedJob struct {
+	SkipReason       string          `json:"skip_reason,omitempty"`
 	DiggerJobId      string          `json:"digger_job_id"`
 	Status           DiggerJobStatus `json:"status"`
 	ProjectName      string          `json:"project_name"`
@@ -160,7 +161,6 @@ func (b *SerializedBatch) ToCommitStatusCheck() string {
 	}
 }
 
-
 func (b *SerializedBatch) ToCheckRunStatus() string {
 	switch b.Status {
 	case BatchJobCreated:
@@ -193,7 +193,6 @@ func (b *SerializedBatch) ToCheckRunConclusion() *string {
 		return nil
 	}
 }
-
 
 func (s *SerializedJob) ResourcesSummaryString(isPlan bool) string {
 	if !isPlan {

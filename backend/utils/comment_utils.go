@@ -7,6 +7,7 @@ import (
 	"runtime/debug"
 	"strconv"
 
+	"github.com/diggerhq/digger/backend/logging"
 	"github.com/diggerhq/digger/backend/models"
 	"github.com/diggerhq/digger/libs/ci"
 	orchestrator_scheduler "github.com/diggerhq/digger/libs/scheduler"
@@ -40,14 +41,14 @@ func UpdatePRCommentRealtime(gh GithubClientProvider, batch *models.DiggerBatch)
 	// Requery database immediately before generating comment to get latest job statuses and batch data
 	// This minimizes race conditions where job statuses or batch data might change between queries
 	slog.Debug("Requerying jobs and batch for latest status before comment generation", "batchId", batch.ID)
-	
+
 	// Get fresh batch data
 	freshBatch, err := models.DB.GetDiggerBatch(&batch.ID)
 	if err != nil {
 		slog.Error("Error requerying batch", "batchId", batch.ID, "error", err)
 		return fmt.Errorf("error requerying batch: %v", err)
 	}
-	
+
 	// Get fresh job data
 	freshJobs, err := models.DB.GetDiggerJobsForBatch(batch.ID)
 	if err != nil {
@@ -72,39 +73,31 @@ func UpdatePRCommentRealtime(gh GithubClientProvider, batch *models.DiggerBatch)
 		return fmt.Errorf("error generating comment message: %v", err)
 	}
 
-	// Update or create the summary comment using fresh batch data
-	commentId, err := UpdateOrCreateSummaryComment(prService, freshBatch, message)
+	// This report already has a remote ID. An uncertain edit must not fall
+	// back to creating an untracked comment on every recovery retry.
+	err = prService.EditComment(freshBatch.PrNumber, strconv.FormatInt(*freshBatch.CommentId, 10), message)
 	if err != nil {
-		slog.Error("Error updating real-time summary comment", "batchId", freshBatch.ID, "error", err)
-		return fmt.Errorf("error updating summary comment: %v", err)
+		return fmt.Errorf("edit existing batch report: %w", err)
 	}
+	slog.Debug("Successfully updated real-time PR comment", "batchId", freshBatch.ID, "commentId", *freshBatch.CommentId)
 
-	// Update batch with comment ID if it was newly created (using fresh batch data)
-	if freshBatch.CommentId == nil && commentId != nil {
-		freshBatch.CommentId = commentId
-		err = models.DB.GormDB.Save(&freshBatch).Error
-		if err != nil {
-			slog.Error("Error saving comment ID to batch", "batchId", freshBatch.ID, "commentId", commentId, "error", err)
-			return fmt.Errorf("error saving comment ID to batch: %v", err)
-		}
-	}
-
-	slog.Debug("Successfully updated real-time PR comment", "batchId", freshBatch.ID, "prNumber", freshBatch.PrNumber, "commentId", commentId)
 	return nil
 }
 
 // UpdatePRComment updates the PR comment for a job status change
 func UpdatePRComment(gh GithubClientProvider, jobId string, job *models.DiggerJob, status string) {
+	jobId = logging.SafeLogValue(jobId)
+	status = logging.SafeLogValue(status)
 	defer func() {
 		if r := recover(); r != nil {
-			slog.Error("Recovered from panic in UpdatePRComment goroutine", 
-				"jobId", jobId, 
-				"status", status, 
+			slog.Error("Recovered from panic in UpdatePRComment goroutine",
+				"jobId", jobId,
+				"status", status,
 				"error", r,
 				"stack", string(debug.Stack()),
 			)
 		}
-	}() 	
+	}()
 
 	err := UpdatePRCommentRealtime(gh, job.Batch)
 	if err != nil {
@@ -162,8 +155,8 @@ func GenerateRealtimeCommentMessage(jobs []models.DiggerJob, batchType orchestra
 					projectDisplayName = jobSpec.ProjectName
 				}
 			} else {
-				slog.Warn("Failed to unmarshal job spec for project name", 
-					"jobId", job.DiggerJobID, 
+				slog.Warn("Failed to unmarshal job spec for project name",
+					"jobId", job.DiggerJobID,
 					"error", err)
 			}
 		}
@@ -172,14 +165,19 @@ func GenerateRealtimeCommentMessage(jobs []models.DiggerJob, batchType orchestra
 		resourcesCreated := uint(0)
 		resourcesUpdated := uint(0)
 		resourcesDeleted := uint(0)
-		
+
 		// Only access DiggerJobSummary fields if it's not nil
 		if job.DiggerJobSummary.ID != 0 {
 			resourcesCreated = job.DiggerJobSummary.ResourcesCreated
 			resourcesUpdated = job.DiggerJobSummary.ResourcesUpdated
 			resourcesDeleted = job.DiggerJobSummary.ResourcesDeleted
 		}
-		
+
+		if job.DependencyRetiredAt != nil {
+			message += fmt.Sprintf("|:no_entry_sign: **%s** |skipped: %s | <a href='%s'>%s</a> | 0 | 0 | 0|\n", projectDisplayName, job.DependencySkipReason(), checkRunUrl, jobTypeTitle)
+			continue
+		}
+
 		// Match exact CLI format: |emoji **project** |<a href='workflow'>status</a> | <a href='comment'>jobType</a> | + | ~ | - |
 		message += fmt.Sprintf("|%s **%s** |<a href='%s'>%s</a> | <a href='%s'>%s</a> | %d | %d | %d|\n",
 			job.Status.ToEmoji(),

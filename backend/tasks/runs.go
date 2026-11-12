@@ -40,34 +40,21 @@ func RunQueuesStateMachine(queueItem *models.DiggerRunQueueItem, service ci.Pull
 		client := service.(*github.GithubService).Client
 		ciBackend := ci_backends.GithubActionCi{Client: client}
 
-		runName, err := services.GetRunNameFromJob(*job)
+		decision, err := services.TriggerJobWithDecision(gh, ciBackend, job.Batch.RepoFullName, job.Batch.RepoOwner, job.Batch.RepoName, &job.Batch.ID, job)
 		if err != nil {
-			slog.Error("could not get run name",
-				"error", err,
-				"jobId", job.ID,
-				runContext)
+			slog.Error("digger.run_queue.dispatch_uncertain", "job_id", job.DiggerJobID, "error", err)
 			return
 		}
-
-		spec, err := services.GetSpecFromJob(*job)
-		if err != nil {
-			slog.Error("could not get spec",
-				"error", err,
-				"jobId", job.ID,
-				runContext)
+		if decision == services.DispatchRetired || decision == services.DispatchFailed {
+			if err := models.DB.SettleFailedRunQueueItem(queueItem, job); err != nil {
+				slog.Error("digger.run_queue.retirement_failed", "job_id", job.DiggerJobID, "error", err)
+			}
 			return
 		}
-
-		vcsToken, err := services.GetVCSTokenFromJob(*job, gh)
-		if err != nil {
-			slog.Error("could not get vcs token",
-				"error", err,
-				"jobId", job.ID,
-				runContext)
+		if decision != services.DispatchSubmitted && decision != services.DispatchSucceeded {
+			slog.Info("digger.run_queue.dispatch_skipped", "job_id", job.DiggerJobID, "reason", decision)
 			return
 		}
-
-		ciBackend.TriggerWorkflow(*spec, *runName, *vcsToken)
 
 		// change status to RunPendingPlan
 		slog.Info("updating run to planning state", runContext)
@@ -147,34 +134,21 @@ func RunQueuesStateMachine(queueItem *models.DiggerRunQueueItem, service ci.Pull
 		client := service.(*github.GithubService).Client
 		ciBackend := ci_backends.GithubActionCi{Client: client}
 
-		runName, err := services.GetRunNameFromJob(*job)
+		decision, err := services.TriggerJobWithDecision(gh, ciBackend, job.Batch.RepoFullName, job.Batch.RepoOwner, job.Batch.RepoName, &job.Batch.ID, job)
 		if err != nil {
-			slog.Error("could not get run name",
-				"error", err,
-				"jobId", job.ID,
-				runContext)
+			slog.Error("digger.run_queue.dispatch_uncertain", "job_id", job.DiggerJobID, "error", err)
 			return
 		}
-
-		spec, err := services.GetSpecFromJob(*job)
-		if err != nil {
-			slog.Error("could not get spec",
-				"error", err,
-				"jobId", job.ID,
-				runContext)
+		if decision == services.DispatchRetired || decision == services.DispatchFailed {
+			if err := models.DB.SettleFailedRunQueueItem(queueItem, job); err != nil {
+				slog.Error("digger.run_queue.retirement_failed", "job_id", job.DiggerJobID, "error", err)
+			}
 			return
 		}
-
-		vcsToken, err := services.GetVCSTokenFromJob(*job, gh)
-		if err != nil {
-			slog.Error("could not get vcs token",
-				"error", err,
-				"jobId", job.ID,
-				runContext)
+		if decision != services.DispatchSubmitted && decision != services.DispatchSucceeded {
+			slog.Info("digger.run_queue.dispatch_skipped", "job_id", job.DiggerJobID, "reason", decision)
 			return
 		}
-
-		ciBackend.TriggerWorkflow(*spec, *runName, *vcsToken)
 
 		slog.Info("updating run to applying state", runContext)
 		dr.Status = models.RunApplying

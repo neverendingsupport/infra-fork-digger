@@ -210,7 +210,7 @@ func Bootstrap(templates embed.FS, diggerController controllers.DiggerController
 
 	authorized.GET("/repos/:repo/projects/:projectName/runs", controllers.RunHistoryForProject)
 
-	authorized.POST("/repos/:repo/projects/:projectName/jobs/:jobId/set-status", diggerController.SetJobStatusForProject)
+	authorized.POST("/repos/:repo/projects/:projectName/jobs/:jobId/set-status", middleware.AccessLevel(models.CliJobAccessType, models.AdminPolicyType), diggerController.SetJobStatusForProject)
 
 	authorized.GET("/repos/:repo/projects", controllers.FindProjectsForRepo)
 	authorized.POST("/repos/:repo/report-projects", controllers.ReportProjectsForRepo)
@@ -251,6 +251,7 @@ func Bootstrap(templates embed.FS, diggerController controllers.DiggerController
 		reposApiGroup := apiGroup.Group("/repos")
 		reposApiGroup.GET("/", controllers.ListReposApi)
 		reposApiGroup.GET("/:repo_id/jobs", controllers.GetJobsForRepoApi)
+		reposApiGroup.POST("/:repo_id/batches/:batch_id/reconcile-dependencies", diggerController.ReconcileBatchDependenciesApi)
 
 		projectsApiGroup := apiGroup.Group("/projects")
 		projectsApiGroup.GET("/", controllers.ListProjectsApi)

@@ -398,7 +398,7 @@ func UpdateCheckRunForBatch(gh utils.GithubClientProvider, batch *models.DiggerB
 			}
 		}
 	}
-	return nil
+	return err
 }
 
 // more modern check runs on github have their own page
@@ -432,7 +432,6 @@ func UpdateCheckRunForJob(gh utils.GithubClientProvider, job *models.DiggerJob, 
 	}
 
 	prService, err := utils.GetPrServiceFromBatch(batch, gh)
-	ghService := prService.(*github.GithubService)
 
 	if err != nil {
 		slog.Warn("Check Run update failed for job - could not get PR service",
@@ -444,6 +443,8 @@ func UpdateCheckRunForJob(gh utils.GithubClientProvider, job *models.DiggerJob, 
 			"reason", "pr_service_unavailable")
 		return fmt.Errorf("error getting github service: %v", err)
 	}
+
+	ghService := prService.(*github.GithubService)
 
 	var jobSpec orchestrator_scheduler.JobJson
 	err = json.Unmarshal([]byte(job.SerializedJobSpec), &jobSpec)
@@ -595,7 +596,7 @@ func UpdateCheckRunForJob(gh utils.GithubClientProvider, job *models.DiggerJob, 
 				"status", status)
 		}
 	}
-	return nil
+	return err
 }
 
 // jobTokenMatchesJob reports whether presented is the job token issued for

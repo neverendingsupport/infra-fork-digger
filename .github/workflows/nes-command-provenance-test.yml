@@ -37,10 +37,27 @@ jobs:
           go-version: 1.25.10
           cache-dependency-path: |
             backend/go.sum
+            ee/backend/go.sum
             libs/go.sum
       - name: Verify database and scheduling contracts
         working-directory: backend
-        run: go test -mod=readonly ./models ./services ./controllers
+        run: go test -mod=readonly ./models ./services ./controllers ./tasks
+      - name: Verify skipped work remains visible in CLI reports
+        working-directory: libs
+        run: go test -mod=readonly ./comment_utils/summary
+      - name: Verify GitLab producer ownership and registered callbacks
+        working-directory: ee/backend
+        run: |
+          cat > "$RUNNER_TEMP/digger-ee-tests.work" <<EOF
+          go 1.25.0
+          use (
+            $GITHUB_WORKSPACE/backend
+            $GITHUB_WORKSPACE/ee/backend
+            $GITHUB_WORKSPACE/libs
+            $GITHUB_WORKSPACE/drift
+          )
+          EOF
+          GOWORK="$RUNNER_TEMP/digger-ee-tests.work" go test -mod=readonly ./controllers -run 'TestGitlabRegisteredProducerPersistsOwnershipBeforeCallback|TestGitlabWebHook|TestBitbucketWebhook' -count=1
       # A separate step, so its migrations don't race the models package's.
       - name: Verify PR lock contracts
         working-directory: backend

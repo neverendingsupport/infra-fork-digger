@@ -179,7 +179,7 @@ func commandOriginJobs(tx *gorm.DB, batchID uuid.UUID) ([]DiggerJob, error) {
 	// Include deleted rows so a deleted job cannot disappear from completeness.
 	// Load serialized jobs only to check identities; none of their contents are
 	// exposed. Terraform outputs and reporter/transport specs are not read.
-	err := tx.Unscoped().Select("id", "deleted_at", "batch_id", "digger_job_id", "project_name", "check_run_id", "serialized_job_spec", "status", "workflow_run_url", "workflow_run_id", "workflow_run_attempt").
+	err := tx.Unscoped().Select("id", "deleted_at", "batch_id", "digger_job_id", "project_name", "check_run_id", "serialized_job_spec", "status", "workflow_run_url", "workflow_run_id", "workflow_run_attempt", "workflow_dispatch_started_at", "dispatch_protocol_version", "dependency_retired_at", "dependency_failure_job_id").
 		Where("batch_id = ?", batchID.String()).Order("id ASC").Limit(MaxCommandProvenanceJobs + 1).Find(&jobs).Error
 	if err != nil {
 		return nil, err

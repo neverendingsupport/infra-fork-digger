@@ -15,6 +15,11 @@ func (db *Database) ClaimDiggerJobDispatch(job *DiggerJob) (bool, error) {
 	result := db.GormDB.Exec(`UPDATE digger_jobs
 		SET workflow_dispatch_started_at = ?, status = ?, status_updated_at = ?, updated_at = ?
 		WHERE id = ? AND digger_job_id = ? AND batch_id = ? AND deleted_at IS NULL
+		AND dependency_retired_at IS NULL
+		AND NOT EXISTS (SELECT 1 FROM digger_job_parent_links l
+			LEFT JOIN digger_jobs p ON p.digger_job_id = l.parent_digger_job_id AND p.deleted_at IS NULL
+			WHERE l.digger_job_id = digger_jobs.digger_job_id AND l.deleted_at IS NULL
+			AND (p.id IS NULL OR p.batch_id IS NULL OR p.batch_id <> digger_jobs.batch_id OR p.status IS NULL OR p.status <> 5 OR p.dependency_retired_at IS NOT NULL))
 		AND workflow_dispatch_started_at IS NULL AND status IN (?, ?)`,
 		now, scheduler.DiggerJobTriggered, now, now,
 		job.ID, job.DiggerJobID, job.BatchID,
@@ -25,7 +30,7 @@ func (db *Database) ClaimDiggerJobDispatch(job *DiggerJob) (bool, error) {
 // QueueDiggerJobIfCreated cannot move a concurrent dispatch back into the queue.
 func (db *Database) QueueDiggerJobIfCreated(job *DiggerJob) (bool, error) {
 	result := db.GormDB.Model(&DiggerJob{}).
-		Where("id = ? AND digger_job_id = ? AND batch_id = ? AND status = ? AND workflow_dispatch_started_at IS NULL",
+		Where("id = ? AND digger_job_id = ? AND batch_id = ? AND status = ? AND workflow_dispatch_started_at IS NULL AND dependency_retired_at IS NULL",
 			job.ID, job.DiggerJobID, job.BatchID, scheduler.DiggerJobCreated).
 		Updates(map[string]interface{}{"status": scheduler.DiggerJobQueuedForRun, "status_updated_at": time.Now().UTC()})
 	return result.RowsAffected == 1, result.Error

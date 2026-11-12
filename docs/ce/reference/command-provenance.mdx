@@ -1,6 +1,6 @@
 ---
 title: "Command provenance"
-description: "Find the plan jobs created by a particular GitHub command."
+description: "Identify command jobs and reconcile work after failed prerequisites."
 ---
 
 The NES fork records which GitHub comment created a plan or apply batch. Queue controllers can use this record to distinguish a new recovery plan from an older successful plan on the same commit. A matching timestamp isn't enough to establish that relationship.
@@ -69,6 +69,8 @@ Before creating jobs, the backend records the source comment ID, a SHA-256 hash 
 
 The API returns at most 20 batches per command and 500 jobs per batch. Exceeding either limit returns HTTP 413 rather than a truncated success. Invalid query parameters return HTTP 400; database failures return HTTP 500. Treat these responses as unavailable evidence.
 
+That limit also bounds dependency retirement; it does not reject ordinary status callbacks for larger automatic batches. Those callbacks derive aggregate progress from all persisted job statuses without retiring descendants. Active or uncertain jobs keep the aggregate pending. A large batch does not gain a truncated provenance proof or bypass the operator endpoint's limits.
+
 | Record | Status values |
 | --- | --- |
 | Batch | `1` created, `2` started, `3` failed, `4` succeeded, `5` invalidated |
@@ -76,6 +78,18 @@ The API returns at most 20 batches per command and 500 jobs per batch. Exceeding
 | Unavailable or mismatched record | `0`, unknown |
 
 Updated CLI clients report `GITHUB_RUN_ID` and `GITHUB_RUN_ATTEMPT` with each job status. GitHub keeps the run ID across reruns and increments the attempt number; see its [variables reference](https://docs.github.com/en/actions/reference/workflows-and-actions/variables). Older clients and non-GitHub environments report zero for both fields. A workflow URL alone does not identify an attempt.
+
+Status callbacks require the job's own CLI token or an admin policy token. Both must belong to the organisation that owns the job's repository; GitHub jobs also require that organisation's active installation link. Read-only access tokens cannot change job status, even within their own organisation. Rejected credentials return HTTP 403 before recording a runner observation.
+
+GitLab and Bitbucket producers persist repository ownership before creating job tokens or dispatching workflows. An authenticated producer can fill the blank repository identity left by older project reports, but cannot replace a different binding or revive a deleted one. A callback or project-report request cannot create this authority as a fallback. The job token and organisation checks still apply.
+
+The backend accepts a callback's generation and status together under database locks. Older attempts, different run IDs, regressions within one attempt and stale or conflicting timestamps return HTTP 409. A higher known attempt must first report `started`. New status writers use a callback revision check in every batch. For qualified batches, the database trigger also prevents older scalar writers from replacing an accepted transition. Rejection leaves the current attempt and its descendants unchanged.
+
+Terminal reports without run identity remain supported for an unqualified batch whose job has no known run identity, including older and non-GitHub runners. Scope, timestamp and revision checks still apply. This completion records unknown execution history and provides no native retirement proof. Once any job in a batch has a persisted qualification marker, every new replica requires attributable terminal callbacks for that batch, even if its producer setting is disabled. New callback handlers never let a report without identity clear a known run/attempt.
+
+During a default-off rolling upgrade, the database permits previous-version scalar status writes while the entire retained batch is unqualified. Those old writes retain their previous behavior and cannot provide native retirement proof. A marker on the job or any retained sibling enables the SQL revision guard for that batch, including protocol-0 parents. Soft-deleting a qualified sibling or disabling the producer setting does not disable that guard. The separate retired-row guard is unconditional.
+
+A failed prerequisite without an attributed run/attempt cannot authorize permanent descendant retirement, including when qualification is enabled later. Reconciliation leaves affected work unresolved with `prerequisite_execution_unknown` unless another qualified failure supplies authority.
 
 ## Use the evidence for recovery
 
@@ -87,7 +101,7 @@ Duplicate deliveries can create several batches for one source comment. The API 
 
 ## Workflow dispatch
 
-A project with several dependencies has one job shared by all of its parents. When the parents finish together, the backend commits a dispatch claim before calling GitHub. Only the caller that acquires that claim can send the workflow request. A late status report, including `created`, cannot erase the claim or permit another dispatch. Status reports still update the job's progress and workflow attempt.
+A project with several dependencies has one job shared by all of its parents. When the parents finish together, the backend commits a dispatch claim before calling GitHub. Only the caller that acquires that claim can send the workflow request. A late status report, including `created`, cannot erase the claim or permit another dispatch. Accepted status reports update the job's progress and workflow attempt together.
 
 GitHub's [workflow dispatch API](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event) does not provide an idempotency key. If the backend loses the response, or stops after claiming the job but before sending it, the job remains claimed. Parent callbacks and the queued-job timer cannot send it again. Check GitHub Actions and the Digger job before starting a replacement command. If a workflow exists, use that run's status or rerun controls; if the outcome remains uncertain, leave the job pending for operator investigation. A new `digger plan` comment creates new jobs and does not clear the old claim.
 
@@ -101,17 +115,97 @@ WHERE batch_id = :'batch_id' AND digger_job_id = :'job_id';
 
 A non-null `workflow_dispatch_started_at` means the backend consumed permission to send, even if the last status says `created`. It does not prove GitHub accepted the request. Correlate the job ID with the backend's `Workflow dispatch response unavailable; retaining claim` log and GitHub Actions. A null value on a legacy job does not prove it was never sent. This lookup does not reset the claim.
 
+## Failed prerequisites
+
+When a prerequisite fails, the backend retires its descendants that have positive evidence of never dispatching. It uses the batch's persisted dependency edges, including chains through an intermediate job that is already running. It does not load a newer PR configuration or borrow the outcome of a later command.
+
+`DIGGER_DEPENDENCY_RETIREMENT_QUALIFICATION_ENABLED` defaults to `false`. New jobs remain protocol `0` until operators enable qualification after verifying that every applicable sender has completed its cutover. With the setting enabled, new GitHub jobs created through the PR batch factory record dispatch protocol version `1` at creation. Non-GitHub jobs and the separate drift producer remain unqualified. Enabling the setting never backfills old jobs; disabling it never removes existing markers or fences.
+
+Every sender for qualified jobs, including the patched legacy plan/apply run queue, commits a dispatch claim before sending. A valid runner callback also records possible execution before acknowledging the runner, even when it reports `created` without a run ID. Retirement competes with those writes on the same persistent job row. If retirement wins, the dispatch claim, queued retry and runner callback cannot reopen the job. A database trigger also rejects an older status writer that tries to reopen a retired row.
+
+A consumed claim, observed workflow, active job or unqualified legacy history prevents retirement. Independent jobs keep their own outcomes. The aggregate becomes failed only when every job has settled; a failed prerequisite alongside an independent running or uncertain job leaves the aggregate nonterminal. If a real parent workflow rerun reports active work after an earlier terminal result, the aggregate reopens while the retired descendants remain fenced. The project check for retired work completes as `skipped`, and its report row explains which prerequisite failed and that the child never dispatched.
+
+The legacy project run queue uses the same dispatch decisions. For a retired or failed stage job, it locks batch, job and run in that order, then marks the run failed and removes its queue item in one transaction. A newer active attempt that wins the batch/job locks prevents settlement. Soft-deleted queue items no longer hold the project's first position, so the next item can advance. A blocked prerequisite or consumed dispatch claim retains its queue item; a claim alone does not establish provider completion.
+
+For compatibility, a retired job keeps numeric status `3`. A matching sealed manifest can also include this additive per-job proof:
+
+```json
+{
+  "status": 3,
+  "workflow_run_id": 0,
+  "workflow_run_attempt": 0,
+  "execution_outcome": {
+    "version": 1,
+    "kind": "never_dispatched",
+    "reason": "failed_dependency",
+    "prerequisite_job_id": "failed-parent-job-id",
+    "retired_at": "2026-11-12T04:00:00Z",
+    "dispatch_fenced": true
+  }
+}
+```
+
+`command_provenance.version` remains `1`. The nested outcome has its own version so consumers can qualify this proof without changing the meanings of existing status numbers. The prerequisite ID identifies a failed job in the same batch and can be an ancestor beyond the immediate parent. A failed workflow with a real run keeps its run identity and has no `never_dispatched` outcome. Missing, changed or incomplete manifests do not receive this proof.
+
+Consumers must verify the full original command and manifest identities before using the outcome. A recognized version-1 `never_dispatched` outcome with reason `failed_dependency` and `dispatch_fenced: true` is positive evidence that this job cannot execute. Status `3`, zero run IDs and the display text alone are insufficient. Other jobs in the batch still require their own execution evidence and live workflow checks. An older reader that ignores the new field remains conservative; a reader that rejects unknown fields must be qualified before using the extension.
+
+The ordinary serialized batch response also adds optional `skip_reason` text for the CLI's summary renderer. That text is for display, not recovery authorization. Upgrade the CLI to preserve skipped rows when a sibling's callback rewrites the report. Older CLIs can show those rows as failed; the internal provenance proof remains available.
+
+## Reconcile a historical batch
+
+Operators can retry dependency reconciliation without submitting a runner result or editing SQL:
+
+```http
+POST /api/repos/42/batches/2dc334e0-fc70-4df6-adce-241dbe15dcc4/reconcile-dependencies
+Authorization: Bearer <internal-secret>
+DIGGER_ORG_ID: <external-organisation-id>
+DIGGER_ORG_SOURCE: <external-organisation-source>
+DIGGER_USER_ID: <operator-id>
+Content-Type: application/json
+
+{
+  "pr_number": 123,
+  "source_comment_id": 123456,
+  "commit_sha": "<original command's PR head>"
+}
+```
+
+Use the original batch, source comment and commit from the provenance response. A merged PR or a new head does not change these identities. The route requires the internal API credential and organisation/repository access described above, and it verifies the original sealed manifest before changing anything. Keep this broadly privileged credential restricted to operators. The supplied operator ID is logged attribution from the trusted caller, not a separately verified GitHub identity.
+
+The operation uses the same retirement transaction as runner completion. It can repair a process interruption after the parent failure was saved but before descendants were retired. Repeating it preserves each retirement timestamp and never sends a workflow. A successful response includes:
+
+```json
+{
+  "reconciliation": {
+    "retired_jobs": ["never-dispatched-child"],
+    "unresolved_jobs": ["independent-running-job"],
+    "batch_status": 1,
+    "unresolved_reasons": {
+      "independent-running-job": "execution_active_or_uncertain"
+    }
+  }
+}
+```
+
+HTTP 200 means reconciliation and report refresh completed; it does not mean every job is terminal. Inspect `unresolved_jobs` and query the command again. HTTP 502 means the transaction persisted but a check or report update failed; repeat the same operation to refresh it. Report retries edit the stored report comment ID; a failed edit does not create another comment. Identity or graph conflicts leave the transaction unchanged.
+
+Rows created before the protocol marker remain version `0`. Reconciliation returns them unresolved with reason `legacy_dispatch_history` when no stronger execution evidence exists. It does not backfill a marker or infer never-dispatched work from age, token expiry, a missing run ID, a merged PR or a newer successful batch. Qualifying an older batch's dispatch history needs additional reviewed deployment and execution evidence; this operation does not accept an attestation or claim that such evidence has been established. Unknown dispatch recovery remains separate.
+
 ## Upgrade and rollback
 
-Deploy the additive backend migration before using the new query. Upgrade the CLI used by plan workflows to obtain run and attempt IDs. A new backend with an older CLI can record command origins, but its jobs still have unknown attempts.
+Deploy the additive backend migration before using the new query. Keep `DIGGER_DEPENDENCY_RETIREMENT_QUALIFICATION_ENABLED=false` on every replica for the initial rollout. This lets operators deploy readers and patched senders without automatically qualifying new work. Older CLI and non-GitHub terminal reports retain the unqualified behavior described above. Previous-version scalar writers can update entirely unqualified batches even after a new replica accepts a callback. In a qualified batch, they cannot replace an established callback revision. New callbacks and update helpers keep their own revision checks throughout the rollout. The default-off setting does not prove that old senders have stopped.
 
-Before enabling recovery plans, finish outstanding Digger workflows and stop the old backend replicas, then start the new replicas and verify the additive migration. Old schedulers do not honor dispatch claims, so do not overlap them with the new scheduler. Chart `0.1.12-nes.6` adds `digger.updateStrategy: Recreate` for this cutover; the default remains `RollingUpdate`. Configure `Recreate` in the same desired deployment that selects the new image, and verify every old pod has stopped before allowing new commands. [Kubernetes documents](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#recreate-deployment) that this strategy terminates old replicas before creating the new replicas during an upgrade. Coordinate this brief backend interruption with operators; GitHub delivery recovery must handle any webhooks missed during it. The new claim does not reconstruct whether a legacy job was dispatched before the upgrade.
+Activation is separate from deploying the release. Before setting `DIGGER_DEPENDENCY_RETIREMENT_QUALIFICATION_ENABLED=true`, finish outstanding Digger workflows, verify that old backend replicas and all direct task senders have stopped, and prevent their return. Qualify the source-built CLI's run/attempt reporting and callback admission behavior, then enable the setting for new GitHub jobs. Every new replica already honors persisted markers regardless of its own setting. A two-replica `RollingUpdate` deployment is not evidence that these cutover conditions have been met.
 
-Existing backend and CLI callers continue to use their original fields and response format. Rolling the backend back leaves the new table and columns in place; don't drop them during rollback. Before starting an old scheduler, stop new command admission and verify that every possibly dispatched workflow has stopped and no unresolved dispatch claim remains. The old scheduler ignores those claims, including a claimed job whose last report says `created`; rolling back with such jobs pending could send them again. Origins are not backfilled. Keep automated recovery disabled until both producer and consumer have been qualified together.
+Chart `0.1.12-nes.6` offers `digger.updateStrategy: Recreate`; its default remains `RollingUpdate`. [Kubernetes documents](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/#recreate-deployment) that Recreate terminates old deployment replicas before creating new ones during an upgrade. Operators can choose a reviewed cutover using this strategy, but must also account for separate task workers and prepared workflows. Any backend interruption needs coordinated webhook recovery. Neither a deployment strategy nor the qualification setting reconstructs legacy dispatch history.
+
+Existing backend and CLI callers keep their original fields and numeric status values. New optional outcome and display fields are additive. Rolling the backend back leaves the new table and columns in place; don't drop them during rollback. Before starting an old scheduler, stop new command admission and verify that every possibly dispatched workflow has stopped and no unresolved dispatch claim remains. The old scheduler ignores those claims, including a claimed job whose last report says `created`; rolling back with such jobs pending could send them again. The retirement migration and its protective trigger must remain installed during rollback. The immediately previous scheduler can read the retained numeric failed status, but it lacks the complete prerequisite gate and new creation marker. Do not overlap it with new backend or task-worker processes. A pre-patch task worker sends workflows directly and can bypass the database claim entirely. Keep those workers stopped during rollback, or retain the patched sender; the protective trigger cannot block their direct remote API calls. Origins and protocol markers are not backfilled. Keep automated recovery disabled until both producer and consumer have been qualified together.
 
 
 ## Test the database contract
 
-The backend's ordinary tests skip PostgreSQL qualification unless `DIGGER_COMMAND_ORIGIN_POSTGRES_DSN` is set. Point it at a disposable PostgreSQL 16 instance with a role that can create databases, then run `go test -mod=readonly ./models ./services ./controllers` from `backend/` with `GOWORK=off`. Each database test creates its own database, applies the committed SQL migrations, and drops it afterward. Do not use a production connection.
+The backend's ordinary tests skip PostgreSQL qualification unless `DIGGER_COMMAND_ORIGIN_POSTGRES_DSN` is set. Point it at a disposable PostgreSQL 16 instance with a role that can create databases, then run `go test -mod=readonly ./models ./services ./controllers ./tasks` from `backend/` with `GOWORK=off`. Each database test creates its own database, applies the committed SQL migrations, and drops it afterward. Do not use a production connection.
 
 The `NES command provenance` GitHub Actions workflow supplies that database on pull requests to `nes-main`. It tests concurrent dispatch claims, migration compatibility, stale current and previous-version writers, complete command manifests, and the source-built action's CLI selection. Service tests also exercise simultaneous parent callbacks against a real HTTP workflow endpoint, a lost response, and completion that arrives before dispatch returns.
+
+Retirement tests also cover PostgreSQL dispatch/callback lock races, concurrent stale attempts and timestamps, stale previous-release writers, restart recovery, claimed children, persisted dependency chains, independent running siblings, source identity drift and the authenticated reconciliation route. Signed JWT tests cover foreign-organisation and read-only callers alongside an authorized admin. Run-queue tests inject a dequeue failure to verify rollback, prove that a later item advances without resending retired work, and reject settlement when a newer attempt wins. Qualification tests cover the default-off producer, non-GitHub exclusion, legacy terminal completion, known-lineage rejection and separate connections honoring persisted markers after disable. Previous scalar snapshots loaded before and after a new callback remain writable only in an unqualified batch; qualified and soft-deleted-sibling controls reject them. A separate protocol-0 fence fixture confirms unconditional retirement protection. The supported historical repair test reproduces a failure saved before descendant retirement. It does not qualify a production legacy row.

@@ -24,6 +24,7 @@ func New() *Config {
 	v.SetDefault("build_date", "null")
 	v.SetDefault("deployed_at", time.Now().UTC().Format(time.RFC3339))
 	v.SetDefault("max_concurrency_per_batch", "0")
+	v.SetDefault("dependency_retirement_qualification_enabled", false)
 	v.BindEnv()
 	return v
 }

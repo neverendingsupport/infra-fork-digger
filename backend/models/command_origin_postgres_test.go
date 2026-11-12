@@ -214,6 +214,11 @@ func TestCommandOriginPostgresMigrationCompatibility(t *testing.T) {
 		return nil
 	}))
 
+	// Exercise current runtime methods only after applying its full schema.
+	commandOriginApplySQL(t, db.GormDB, filepath.Join("..", "migrations", "20261112040000_dependency_retirement.sql"))
+	// A deployed binary starts with fresh driver statement caches after DDL.
+	db.GormDB = commandOriginPostgresConnect(t, db.GormDB.Dialector.(*postgres.Dialector).DSN)
+
 	// Old writers can still insert after upgrade. New readers see unknown attempts.
 	oldWriterJob := commandOriginPostgresJob(t, db, legacyBatch, "old-writer")
 	current = DiggerJob{}

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+	"time"
 
 	"github.com/diggerhq/digger/libs/scheduler"
 	"gorm.io/gorm"
@@ -37,7 +38,19 @@ type CommandProvenanceOrigin struct {
 	Command         scheduler.DiggerCommand `json:"command"`
 }
 
+// ExecutionOutcome is proof of permanently fenced, never-dispatched work.
+// It is independent of numeric status so version-1 readers remain conservative.
+type ExecutionOutcome struct {
+	Version           int       `json:"version"`
+	Kind              string    `json:"kind"`
+	Reason            string    `json:"reason"`
+	PrerequisiteJobID string    `json:"prerequisite_job_id"`
+	RetiredAt         time.Time `json:"retired_at"`
+	DispatchFenced    bool      `json:"dispatch_fenced"`
+}
+
 type CommandProvenanceJob struct {
+	ExecutionOutcome   *ExecutionOutcome         `json:"execution_outcome,omitempty"`
 	DBID               uint                      `json:"db_id"`
 	JobID              string                    `json:"job_id"`
 	Project            string                    `json:"project"`
@@ -132,6 +145,17 @@ func commandProvenanceBatch(tx *gorm.DB, origin BatchCommandOrigin) (CommandProv
 			// Legacy zero values are explicitly unknown, even when a URL exists.
 			out.WorkflowRunID = job.WorkflowRunID
 			out.WorkflowRunAttempt = job.WorkflowRunAttempt
+			if result.ManifestComplete && job.DispatchProtocolVersion == 1 && job.DependencyRetiredAt != nil && job.DependencyFailureJobID != "" && !jobHasExecutionEvidence(job) && job.Status == scheduler.DiggerJobFailed {
+				linked, err := jobHasWorkflowLink(tx, job.DiggerJobID)
+				if err != nil {
+					return result, err
+				}
+				if !linked {
+					out.ExecutionOutcome = &ExecutionOutcome{Version: 1, Kind: "never_dispatched", Reason: "failed_dependency", PrerequisiteJobID: job.DependencyFailureJobID, RetiredAt: *job.DependencyRetiredAt, DispatchFenced: true}
+				} else {
+					slog.Error("digger.command_provenance.retirement_conflict", "batch_id", origin.BatchID, "job_id", job.DiggerJobID, "reason", "workflow_attribution_present")
+				}
+			}
 		}
 		result.Jobs = append(result.Jobs, out)
 	}

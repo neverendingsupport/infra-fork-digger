@@ -45,9 +45,10 @@ func (p dispatchTokenProvider) Get(_, _ int64) (*github.Client, *string, error) 
 
 func schedulerDispatchFixture(t *testing.T) (*models.Database, models.DiggerBatch, *models.DiggerJob) {
 	t.Helper()
+	t.Setenv("DIGGER_DEPENDENCY_RETIREMENT_QUALIFICATION_ENABLED", "true")
 	db, err := gorm.Open(sqlite.Open(filepath.Join(t.TempDir(), "dispatch.db")+"?_busy_timeout=5000"), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
 	require.NoError(t, err)
-	require.NoError(t, db.AutoMigrate(&models.DiggerBatch{}, &models.DiggerJob{}, &models.DiggerJobParentLink{}, &models.GithubAppInstallation{}))
+	require.NoError(t, db.AutoMigrate(&models.DiggerBatch{}, &models.DiggerJob{}, &models.DiggerJobParentLink{}, &models.GithubDiggerJobLink{}, &models.GithubAppInstallation{}))
 	sqlDB, err := db.DB()
 	require.NoError(t, err)
 	previous, previousLimit := models.DB, config.DiggerConfig.GetInt("max_concurrency_per_batch")

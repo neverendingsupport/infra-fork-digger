@@ -8,9 +8,9 @@ import (
 	"github.com/diggerhq/digger/backend/models"
 )
 
-// recordWorkflowAttempt pairs the status with the attempt reported by its job
-// client. Legacy clients explicitly clear the pair; nearby runs are never guessed.
-// Consumers must independently verify this pair against the workflow provider.
+// recordWorkflowAttempt validates the reported pair without authorizing a write.
+// The persistent callback transition rejects stale or unknown generations.
+// Consumers must still verify accepted lineage against the workflow provider.
 func recordWorkflowAttempt(job *models.DiggerJob, request SetJobStatusRequest) error {
 	id, attempt := request.WorkflowRunID, request.WorkflowRunAttempt
 	if id == 0 && attempt == 0 {

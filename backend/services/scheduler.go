@@ -123,6 +123,43 @@ func ScheduleJob(ciBackend ci_backends.CiBackend, repoFullname string, repoOwner
 }
 
 func TriggerJob(gh utils.GithubClientProvider, ciBackend ci_backends.CiBackend, repoFullname string, repoOwner string, repoName string, batchId *uuid.UUID, job *models.DiggerJob) error {
+	_, err := TriggerJobWithDecision(gh, ciBackend, repoFullname, repoOwner, repoName, batchId, job)
+	return err
+}
+
+type JobDispatchDecision string
+
+const (
+	DispatchSubmitted JobDispatchDecision = "submitted"
+	DispatchUncertain JobDispatchDecision = "claimed_or_uncertain"
+	DispatchRetired   JobDispatchDecision = "retired"
+	DispatchBlocked   JobDispatchDecision = "blocked"
+	DispatchSucceeded JobDispatchDecision = "succeeded"
+	DispatchFailed    JobDispatchDecision = "failed"
+)
+
+// TriggerJobWithDecision owns the dispatch effect and reports why it did not send.
+func TriggerJobWithDecision(gh utils.GithubClientProvider, ciBackend ci_backends.CiBackend, repoFullname string, repoOwner string, repoName string, batchId *uuid.UUID, job *models.DiggerJob) (JobDispatchDecision, error) {
+	current, err := models.DB.GetDiggerJob(job.DiggerJobID)
+	if err != nil {
+		return DispatchBlocked, err
+	}
+	if current.ID != job.ID || current.BatchID == nil || *current.BatchID != batchId.String() {
+		return DispatchBlocked, fmt.Errorf("dispatch job identity changed")
+	}
+	if current.DependencyRetiredAt != nil {
+		return DispatchRetired, nil
+	}
+	if current.Status == orchestrator_scheduler.DiggerJobSucceeded {
+		return DispatchSucceeded, nil
+	}
+	if current.Status == orchestrator_scheduler.DiggerJobFailed {
+		return DispatchFailed, nil
+	}
+	if current.WorkflowDispatchStartedAt != nil {
+		return DispatchUncertain, nil
+	}
+
 	slog.Info("Triggering job",
 		"jobId", job.DiggerJobID,
 		slog.Group("repository",
@@ -134,7 +171,7 @@ func TriggerJob(gh utils.GithubClientProvider, ciBackend ci_backends.CiBackend, 
 
 	if job.SerializedJobSpec == nil {
 		slog.Error("Job spec is nil", "jobId", job.DiggerJobID)
-		return fmt.Errorf("JobSpec is nil, skipping")
+		return DispatchBlocked, fmt.Errorf("JobSpec is nil, skipping")
 	}
 
 	jobString := string(job.SerializedJobSpec)
@@ -143,19 +180,19 @@ func TriggerJob(gh utils.GithubClientProvider, ciBackend ci_backends.CiBackend, 
 	runName, err := GetRunNameFromJob(*job)
 	if err != nil {
 		slog.Error("Could not get run name", "jobId", job.DiggerJobID, "error", err)
-		return fmt.Errorf("could not get run name %v", err)
+		return DispatchBlocked, fmt.Errorf("could not get run name %v", err)
 	}
 
 	spec, err := GetSpecFromJob(*job)
 	if err != nil {
 		slog.Error("Could not get spec", "jobId", job.DiggerJobID, "error", err)
-		return fmt.Errorf("could not get spec %v", err)
+		return DispatchBlocked, fmt.Errorf("could not get spec %v", err)
 	}
 
 	vcsToken, err := GetVCSTokenFromJob(*job, gh)
 	if err != nil {
 		slog.Error("Could not get VCS token", "jobId", job.DiggerJobID, "error", err)
-		return fmt.Errorf("could not get vcs token: %v", err)
+		return DispatchBlocked, fmt.Errorf("could not get vcs token: %v", err)
 	}
 
 	// Competing parent callbacks and queued-job sweepers can prepare the same
@@ -163,22 +200,31 @@ func TriggerJob(gh utils.GithubClientProvider, ciBackend ci_backends.CiBackend, 
 	// reports cannot reopen that claim.
 	claimed, err := models.DB.ClaimDiggerJobDispatch(job)
 	if err != nil {
-		return fmt.Errorf("claim workflow dispatch: %w", err)
+		return DispatchBlocked, fmt.Errorf("claim workflow dispatch: %w", err)
 	}
 	if !claimed {
-		slog.Info("Workflow dispatch already claimed", "jobId", job.DiggerJobID)
-		return nil
+		current, err := models.DB.GetDiggerJob(job.DiggerJobID)
+		if err != nil {
+			return DispatchBlocked, err
+		}
+		if current.DependencyRetiredAt != nil {
+			return DispatchRetired, nil
+		}
+		if current.WorkflowDispatchStartedAt != nil {
+			return DispatchUncertain, nil
+		}
+		return DispatchBlocked, nil
 	}
 
 	err = ciBackend.TriggerWorkflow(*spec, *runName, *vcsToken)
 	if err != nil {
 		slog.Error("Workflow dispatch response unavailable; retaining claim", "jobId", job.DiggerJobID, "error", err)
-		return err
+		return DispatchUncertain, err
 	}
 
 	// A fast workflow callback may already have advanced this job. Never save
 	// the stale pre-dispatch object over that newer status or its run identity.
 	slog.Info("Job successfully triggered", "jobId", job.DiggerJobID)
 
-	return nil
+	return DispatchSubmitted, nil
 }

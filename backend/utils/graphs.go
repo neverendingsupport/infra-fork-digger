@@ -39,6 +39,11 @@ func ConvertJobsToDiggerJobs(jobType scheduler.DiggerCommand, jobReporterType st
 		return nil, nil, fmt.Errorf("error retrieving organisation")
 	}
 	organisationName := organisation.Name
+	if vcsType == models.DiggerVCSGitlab || vcsType == models.DiggerVCSBitbucket {
+		if err := models.DB.EnsureProducerRepository(organisationId, vcsType, repoFullName, repoOwner, repoName); err != nil {
+			return nil, nil, fmt.Errorf("persist producer repository ownership: %w", err)
+		}
+	}
 
 	backendHostName := GetPublicBaseURL()
 
