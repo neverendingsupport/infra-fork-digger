@@ -252,6 +252,7 @@ func Bootstrap(templates embed.FS, diggerController controllers.DiggerController
 		reposApiGroup.GET("/", controllers.ListReposApi)
 		reposApiGroup.GET("/:repo_id/jobs", controllers.GetJobsForRepoApi)
 		reposApiGroup.POST("/:repo_id/batches/:batch_id/reconcile-dependencies", diggerController.ReconcileBatchDependenciesApi)
+		reposApiGroup.POST("/:repo_id/batches/:batch_id/retire-failed-dependents", diggerController.StopLegacyDependentApi)
 
 		projectsApiGroup := apiGroup.Group("/projects")
 		projectsApiGroup.GET("/", controllers.ListProjectsApi)

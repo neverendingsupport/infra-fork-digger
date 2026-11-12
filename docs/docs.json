@@ -240,6 +240,7 @@
               "ce/reference/action-inputs",
               "ce/reference/api",
               "ce/reference/command-provenance",
+              "ce/reference/historical-dependency-stop",
               "ce/reference/terraform.lock",
               "ce/reference/comment-args",
               "ce/reference/environment-variables"

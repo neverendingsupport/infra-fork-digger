@@ -911,6 +911,14 @@ func (db *Database) GetDiggerBatch(batchId *uuid.UUID) (*DiggerBatch, error) {
 			return nil, result.Error
 		}
 	}
+	var jobs []DiggerJob
+	if err := db.GormDB.Unscoped().Where("batch_id=? AND dependency_retirement_operation_id IS NOT NULL", batch.ID.String()).Find(&jobs).Error; err != nil {
+		return nil, err
+	}
+	if err := loadDependencyStops(db.GormDB, jobs); err != nil {
+		return nil, err
+	}
+	effectiveHistoricalStatus(batch, jobs)
 	return batch, nil
 }
 
@@ -1344,6 +1352,9 @@ func (db *Database) GetDiggerJobsForBatch(batchId uuid.UUID) ([]DiggerJob, error
 	slog.Debug("fetched digger jobs for batch",
 		"batchId", batchId,
 		"jobCount", len(jobs))
+	if err := loadDependencyStops(db.GormDB, jobs); err != nil {
+		return nil, err
+	}
 	return jobs, nil
 }
 
@@ -1469,7 +1480,11 @@ func (db *Database) GetDiggerJob(jobId string) (*DiggerJob, error) {
 			return nil, result.Error
 		}
 	}
-	return job, nil
+	jobs := []DiggerJob{*job}
+	if err := loadDependencyStops(db.GormDB, jobs); err != nil {
+		return nil, err
+	}
+	return &jobs[0], nil
 }
 
 func (db *Database) GetDiggerJobParentLinksByParentId(parentId *string) ([]DiggerJobParentLink, error) {

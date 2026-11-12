@@ -10,6 +10,7 @@ import (
 	"github.com/diggerhq/digger/backend/logging"
 	"github.com/diggerhq/digger/backend/models"
 	"github.com/diggerhq/digger/libs/ci"
+	gh "github.com/diggerhq/digger/libs/ci/github"
 	orchestrator_scheduler "github.com/diggerhq/digger/libs/scheduler"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
@@ -17,55 +18,39 @@ import (
 
 // UpdatePRCommentRealtime updates the GitHub PR comment with current job statuses
 func UpdatePRCommentRealtime(gh GithubClientProvider, batch *models.DiggerBatch) error {
-	slog.Debug("Updating PR comment with real-time job statuses", "batchId", batch.ID, "prNumber", batch.PrNumber)
-
-	// Get PR service for this batch
-	prService, err := GetPrServiceFromBatch(batch, gh)
-	if err != nil {
-		slog.Error("Error getting PR service for real-time comment update", "batchId", batch.ID, "error", err)
-		return fmt.Errorf("error getting PR service: %v", err)
+	if _, err := HistoricalPublication(batch); err != nil {
+		return err
 	}
+	return models.DB.WithPublicationBarrier(batch.ID, func(db *models.Database) error { return updatePRCommentAtPublicationBoundary(db, gh, batch) })
+}
 
-	// Get all jobs for this batch (initial check)
-	jobs, err := models.DB.GetDiggerJobsForBatch(batch.ID)
+func updatePRCommentAtPublicationBoundary(db *models.Database, gh GithubClientProvider, batch *models.DiggerBatch) error {
+	publication, err := historicalPublication(db, batch)
 	if err != nil {
-		slog.Error("Error getting jobs for batch", "batchId", batch.ID, "error", err)
-		return fmt.Errorf("error getting jobs for batch: %v", err)
+		return fmt.Errorf("historical report authorization: %w", err)
 	}
-
-	if len(jobs) == 0 {
-		slog.Debug("No jobs found for batch", "batchId", batch.ID)
+	var freshBatch *models.DiggerBatch
+	var freshJobs []models.DiggerJob
+	if publication != nil {
+		freshBatch = &publication.Batch
+		freshJobs = publication.Jobs
+	} else {
+		freshBatch, err = db.GetDiggerBatch(&batch.ID)
+		if err != nil {
+			return err
+		}
+		freshJobs, err = db.GetDiggerJobsForBatch(batch.ID)
+		if err != nil {
+			return err
+		}
+	}
+	if freshBatch.CommentId == nil || len(freshJobs) == 0 {
 		return nil
 	}
-
-	// Requery database immediately before generating comment to get latest job statuses and batch data
-	// This minimizes race conditions where job statuses or batch data might change between queries
-	slog.Debug("Requerying jobs and batch for latest status before comment generation", "batchId", batch.ID)
-
-	// Get fresh batch data
-	freshBatch, err := models.DB.GetDiggerBatch(&batch.ID)
+	prService, err := getPrServiceFromBatch(db, freshBatch, gh)
 	if err != nil {
-		slog.Error("Error requerying batch", "batchId", batch.ID, "error", err)
-		return fmt.Errorf("error requerying batch: %v", err)
+		return err
 	}
-
-	// Get fresh job data
-	freshJobs, err := models.DB.GetDiggerJobsForBatch(batch.ID)
-	if err != nil {
-		slog.Error("Error requerying jobs for batch", "batchId", freshBatch.ID, "error", err)
-		return fmt.Errorf("error requerying jobs for batch: %v", err)
-	}
-
-	if freshBatch.CommentId == nil {
-		slog.Debug("No comment id found for batch, not updating", "batchId", batch.ID)
-		return nil
-	}
-
-	if len(freshJobs) == 0 {
-		slog.Debug("No jobs found after requery", "batchId", freshBatch.ID)
-		return nil
-	}
-
 	// Generate comment message with fresh job data
 	message, err := GenerateRealtimeCommentMessage(freshJobs, freshBatch.BatchType)
 	if err != nil {
@@ -230,6 +215,40 @@ digger unlock
 
 // UpdateOrCreateSummaryComment updates or creates the summary comment for the batch
 func UpdateOrCreateSummaryComment(prService ci.PullRequestService, batch *models.DiggerBatch, message string) (*int64, error) {
+	if _, err := HistoricalPublication(batch); err != nil {
+		return nil, err
+	}
+	if models.DB == nil {
+		return updateSummaryAtPublicationBoundary(nil, prService, batch, message)
+	}
+	var result *int64
+	err := models.DB.WithPublicationBarrier(batch.ID, func(db *models.Database) error {
+		var err error
+		result, err = updateSummaryAtPublicationBoundary(db, prService, batch, message)
+		return err
+	})
+	return result, err
+}
+
+func updateSummaryAtPublicationBoundary(db *models.Database, prService ci.PullRequestService, batch *models.DiggerBatch, message string) (*int64, error) {
+	publication, err := historicalPublication(db, batch)
+	if err != nil {
+		return nil, err
+	}
+	if publication != nil {
+		service, ok := prService.(*gh.GithubService)
+		if !ok || service.Owner != publication.Batch.RepoOwner || service.RepoName != publication.Batch.RepoName {
+			return nil, models.ErrDependencyStopConflict
+		}
+		batch = &publication.Batch
+		message, err = GenerateRealtimeCommentMessage(publication.Jobs, batch.BatchType)
+		if err != nil {
+			return nil, err
+		}
+		err = prService.EditComment(batch.PrNumber, strconv.FormatInt(*batch.CommentId, 10), message)
+		return batch.CommentId, err
+	}
+
 	if batch.CommentId != nil {
 		// Update existing comment
 		commentIdStr := strconv.FormatInt(*batch.CommentId, 10)
@@ -262,6 +281,10 @@ func UpdateOrCreateSummaryComment(prService ci.PullRequestService, batch *models
 
 // GetPrServiceFromBatch gets the appropriate PR service for a batch
 func GetPrServiceFromBatch(batch *models.DiggerBatch, gh GithubClientProvider) (ci.PullRequestService, error) {
+	return getPrServiceFromBatch(models.DB, batch, gh)
+}
+
+func getPrServiceFromBatch(db *models.Database, batch *models.DiggerBatch, gh GithubClientProvider) (ci.PullRequestService, error) {
 	slog.Debug("Getting PR service for batch",
 		"batchId", batch.ID,
 		"vcs", batch.VCS,
@@ -276,7 +299,8 @@ func GetPrServiceFromBatch(batch *models.DiggerBatch, gh GithubClientProvider) (
 			"repoFullName", batch.RepoFullName,
 		)
 
-		service, _, err := GetGithubService(
+		service, _, err := getGithubService(
+			db,
 			gh,
 			batch.GithubInstallationId,
 			batch.RepoFullName,

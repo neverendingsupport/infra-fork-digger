@@ -1,0 +1,75 @@
+---
+title: "Stop a historical dependent"
+description: "Permanently stop future dispatch without inventing a legacy execution history."
+---
+
+If a legacy leaf remains Created after its prerequisite fails, operators can stop future dispatch without guessing whether it ran. The operation records a permanent fence while leaving prior execution unknown. A separate verification can settle that work under the `merged_pr_all_actions_stopped_v1` policy. It never upgrades the job's dispatch protocol or emits `never_dispatched`.
+
+This is separate from [native dependency reconciliation](/ce/reference/command-provenance). Neither a Created status nor a missing run ID establishes whether an old job executed. The operation requires the original complete sealed manifest, exact source/body/head identity, a named failed prerequisite attempt, an unclaimed target with no known execution attribution, and a positive original report comment ID. It refuses a target with descendants. The operation keeps the existing 500-job provenance bound.
+
+## Qualify the deployment first
+
+Apply the additive migration and deploy readers with `DIGGER_LEGACY_DEPENDENCY_STOP_ENABLED` absent or `false`. Plans are available while this gate is closed; new execute requests return 503 without creating a fence. This setting is independent of `DIGGER_DEPENDENCY_RETIREMENT_QUALIFICATION_ENABLED`, which remains default-off and does not qualify old rows.
+
+Before enabling historical execute, verify that all backend replicas, queue workers and report writers understand pending versus verified stops, drain older workflows, and prevent old senders or readers from returning. A two-replica RollingUpdate does not establish that cutover. Previous readers can misreport the numeric failed job as skipped or complete; the new SQL guard prevents terminal batch writes during pending verification, but does not qualify those readers. Keep the migration and permanent fences on rollback, and do not return to older readers while these operations exist.
+
+Only after that review, set `DIGGER_LEGACY_DEPENDENCY_STOP_ENABLED=true` on the operator-serving replicas. The gate admits new fences; it is not evidence of a completed cutover. Disabling it never weakens an existing fence or prevents verification of that operation. Keep new fences disabled until operators complete that review.
+
+## Plan, fence, then verify
+
+The endpoint uses the existing internal operator credential and trusted organisation headers. CLI job JWTs and read-only JWTs grant no operator authority. `DIGGER_USER_ID` is bounded audit attribution supplied by that trusted caller, not a separately authenticated GitHub principal. Keep this broad credential out of consumers.
+
+```http
+POST /api/repos/1/batches/4bddc990-19fe-4838-a267-b072df73aa82/retire-failed-dependents
+Authorization: Bearer <internal-secret>
+DIGGER_ORG_ID: <external-organisation-id>
+DIGGER_ORG_SOURCE: <external-organisation-source>
+DIGGER_USER_ID: <operator-id>
+Content-Type: application/json
+
+{
+  "version": 1,
+  "mode": "plan",
+  "operation_id": "a06c8142-4143-422b-9e44-377766aa3197",
+  "pr_number": 3197,
+  "source_comment_id": 6746866728,
+  "body_sha256": "ba7707804cf8a8400a1bac3f2d7f291966476b77974b7ca2979ecad1eda5cc02",
+  "commit_sha": "ecdc93f734c02e56cd6e0fbe6b324a6a0600b07a",
+  "targets": [{"db_id": 2753, "job_id": "wWyMzTVZcl"}],
+  "failed_prerequisite": {
+    "db_id": 2752,
+    "job_id": "b2pIz8ZHrR",
+    "workflow_run_id": 42665476673,
+    "workflow_run_attempt": 1
+  },
+  "settlement_policy": "merged_pr_all_actions_stopped_v1"
+}
+```
+
+These historical identifiers illustrate the request; the UUID is a test value, not permission to execute it. Choose one operation UUID for the reviewed request and preserve it through every retry. Bodies are limited to 16 KiB; unknown fields and trailing JSON are rejected.
+
+Plan reads the source comment, merged/closed PR and named failed attempt, then returns the full bounded manifest, original report comment ID, graph, execution-state snapshot and `plan_sha256`. It creates no audit, fence, check or comment. Review this concrete plan before execute. The report ID comes from the batch, not caller input; a missing ID holds the operation. The report body can change and is not hashed into the immutable outcome.
+
+For execute, keep the request identical, change `mode` to `execute`, and add `expected_plan_sha256` with the returned digest. The backend rechecks the plan under batch → job locks. A changed claim, callback revision, attempt, manifest or source conflicts. It atomically records the audit, fences the target and keeps the aggregate nonterminal. This phase does not wait for unrelated Actions to stop, and it cannot be undone. A concurrent runner observation or dispatch claim that wins first prevents fencing. A fence that wins first rejects later admission, retries and stale callbacks.
+
+Execute returns 202 with `fenced_pending_verification`. Retry a lost response with the same UUID, request and digest. It returns the same fence rather than creating another operation. Changing the target or plan under that UUID conflicts.
+
+For verify, change only `mode` to `verify`. The backend reads the original command, merged/closed PR and failed prerequisite again. It requires complete zero-result [repository workflow-run searches](https://docs.github.com/en/rest/actions/workflow-runs#list-workflow-runs-for-a-repository) for `queued`, `in_progress`, `requested`, `waiting` and `pending`, without branch, head or date filters. Missing totals, pagination uncertainty or provider errors hold verification. It rereads PR/source/attempt identity after the scan and compares local state under locks before committing the checkpoint.
+
+Active Actions or unavailable evidence return 202 with a pending reason. The fence stays installed. A local/source identity conflict can return 409 and also preserves the fence. Successful verification returns 200 and appends an immutable settlement checkpoint. Independent running or uncertain siblings retain their state and still prevent a terminal aggregate. For the two-job fixture above, the verified child is skipped and the aggregate fails. The original failed cause stays in the fence audit forever.
+
+If the parent reruns before verification, or after a checkpoint but before reservation release, keep the original request, UUID and plan digest. Retry `mode: verify` after the latest root stops, whether it failed or succeeded. Verification reads the original failed attempt through GitHub's [specific-attempt endpoint](https://docs.github.com/en/rest/actions/workflow-runs#get-a-workflow-run-attempt), then separately checks the latest root and all incomplete Actions statuses. It never rewrites the original cause to describe the later result.
+
+Each checkpoint binds the current local job generations and fresh provider evidence. A callback that changes that state invalidates the current checkpoint, reopens a terminal aggregate and returns the stop to pending until verification succeeds again. Old checkpoints and the original audit remain immutable. Retrying identical local/provider inputs reuses the checkpoint and timestamp; changed inputs append another checkpoint. The permanent child fence never reopens. New SQL guards reject stale scalar rewinds and terminal batch writes while a checkpoint is stale or another job remains pending.
+
+Report updates edit only the batch's stored comment and existing checks. A 502 response means durable state persisted but report refresh failed; retry the same operation. Pending checks remain in progress with no conclusion. Reports always say that prior execution is unknown. Every shared report/check writer authorizes the complete audited source and immutable destinations at the provider boundary; it never replaces those destinations with a later mutable batch ID. Provider writes and first-fence admission share a per-batch PostgreSQL advisory lock. Writers reauthorize after acquiring it, so an earlier no-fence observation cannot authorize mutable destinations after admission. Client installation lookup uses the same guard transaction; publication does not need an extra pooled connection for that lookup. A callback can accept durable status while its asynchronous report refresh records an explicit `digger.publication.rejected` conflict. Neither that callback nor reconciliation can publish to a different report or check. Pending legacy run-queue items remain queued; after verification, ordinary queue settlement can fail/dequeue that stage atomically.
+
+## Read the outcome
+
+Consumers use the existing source-scoped [command provenance GET](/ce/reference/command-provenance), not the full jobs list. The outer version remains 1. The new per-job kind is `future_dispatch_fenced`, with required `contract_revision: 3`, with `prior_execution: "unknown"` permanently, `fence_id == recovery_id`, the opaque plan digest, and immutable source/batch/job/report binding. The full JSON Schema and pending/verified examples are versioned under `backend/models/testdata/dependency-stop/`.
+
+Pending omits both `verified_at` and `settlement`; numeric status 3 cannot authorize settlement. Verified includes a checkpoint UUID, opaque input/local-state digests, merged/closed PR head and merge commit, the provider scan interval and all five zero counts. `verified_at` describes the current checkpoint; the audit response labels its unchanged first checkpoint time `first_verified_at`. The original command head remains separate from the settled PR head. Require `retired_at <= provider_checked_from <= provider_checked_through <= verified_at`.
+
+Match the entire bound manifest to the outer complete batch, the target tuple to its enclosing job, `binding.original_prerequisite` to the original failed cause, `settlement.original_failure` to its specific attempt, and `settlement.current_root` plus `settlement.jobs` to the current outer identities/status/run/attempt/URL, and `report_comment_id` to the exact trusted report. Missing or changed bindings withhold the outcome. Readers must explicitly recognize this new kind, revision and policy; a native-only reader must reject it. The original attempt can differ from the current outer root. A later successful root is recorded as successful; closed/merged with all reported work stopped is the settlement policy, not a claim that every current root failed.
+
+Verification records a past checkpoint, not permanent repository idleness or permission to apply. Before releasing reservations, the consumer still needs two matching complete provenance reads around fresh provider checks, the same merged/closed PR head/merge identity, stopped Actions, a terminal aggregate and settled evidence for every other job/batch. A report fallback must recheck the exact report's actor, revision and digest. The initial Infrabot consumer policy is limited to merged/closed PR 3197. It grants no open-PR permission and adds no POST client role.

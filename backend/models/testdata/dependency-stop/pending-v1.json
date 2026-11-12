@@ -1,0 +1,56 @@
+{
+  "version": 1,
+  "kind": "future_dispatch_fenced",
+  "reason": "failed_dependency",
+  "prerequisite_job_id": "b2pIz8ZHrR",
+  "retired_at": "2026-11-12T09:00:00Z",
+  "dispatch_fenced": true,
+  "prior_execution": "unknown",
+  "fence_id": "11111111-2222-4333-8444-555555555555",
+  "recovery_id": "11111111-2222-4333-8444-555555555555",
+  "plan_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "settlement_policy": "merged_pr_all_actions_stopped_v1",
+  "settlement_state": "fenced_pending_verification",
+  "binding": {
+    "digger_repository_id": 1,
+    "repository_id": 954216504,
+    "repo_full_name": "neverendingsupport/infra-terraform",
+    "pr_number": 3197,
+    "source_comment_id": 6746866728,
+    "body_sha256": "ba7707804cf8a8400a1bac3f2d7f291966476b77974b7ca2979ecad1eda5cc02",
+    "commit_sha": "ecdc93f734c02e56cd6e0fbe6b324a6a0600b07a",
+    "command": "apply",
+    "batch_id": "4bddc990-19fe-4838-a267-b072df73aa82",
+    "aggregate_check_id": "129327714611",
+    "target": {
+      "db_id": 2753,
+      "job_id": "wWyMzTVZcl",
+      "project": "infra-k8s",
+      "project_check_id": "129327703323"
+    },
+    "manifest": [
+      {
+        "db_id": 2752,
+        "job_id": "b2pIz8ZHrR",
+        "project": "access-control",
+        "project_check_id": "129327710180"
+      },
+      {
+        "db_id": 2753,
+        "job_id": "wWyMzTVZcl",
+        "project": "infra-k8s",
+        "project_check_id": "129327703323"
+      }
+    ],
+    "report_comment_id": 6746869800,
+    "original_prerequisite": {
+      "db_id": 2752,
+      "job_id": "b2pIz8ZHrR",
+      "project": "access-control",
+      "project_check_id": "129327710180",
+      "workflow_run_id": 42665476673,
+      "workflow_run_attempt": 1
+    }
+  },
+  "contract_revision": 3
+}

@@ -62,6 +62,9 @@ type DiggerBatch struct {
 	SourceDetails   []byte
 	VCSConnectionId *uint ``
 	VCSConnection   VCSConnection
+
+	// Only snapshots prepared by HistoricalPublication carry this local content guard.
+	historicalPublicationSHA256 string
 }
 
 type DiggerJob struct {
@@ -98,11 +101,13 @@ type DiggerJob struct {
 	WorkflowDispatchStartedAt *time.Time `gorm:"<-:false"`
 	CallbackRevision          int64      `gorm:"not null;default:0;<-:false"`
 	// Version zero is legacy: absence of a dispatch claim is not historical proof.
-	DispatchProtocolVersion int        `gorm:"not null;default:0;<-:create"`
-	DependencyRetiredAt     *time.Time `gorm:"<-:false"`
-	DependencyFailureJobID  string     `gorm:"not null;default:'';<-:false"`
-	StatusUpdatedAt         time.Time
-	ReporterType            string `gorm:"default:'lazy'"` // temporary, to be replaced by SerializedReporterSpec
+	DispatchProtocolVersion         int             `gorm:"not null;default:0;<-:create"`
+	DependencyRetiredAt             *time.Time      `gorm:"<-:false"`
+	DependencyFailureJobID          string          `gorm:"not null;default:'';<-:false"`
+	DependencyRetirementOperationID *uuid.UUID      `gorm:"type:uuid;<-:false"`
+	DependencyStop                  *DependencyStop `gorm:"-"`
+	StatusUpdatedAt                 time.Time
+	ReporterType                    string `gorm:"default:'lazy'"` // temporary, to be replaced by SerializedReporterSpec
 }
 
 type DiggerJobSummary struct {
@@ -232,6 +237,9 @@ func GetCommitStatusForJob(job *DiggerJob) (string, error) {
 }
 
 func GetCheckRunStatusForJob(job *DiggerJob) (string, error) {
+	if job.DependencyStopPending() {
+		return "in_progress", nil
+	}
 	switch job.Status {
 	case orchestrator_scheduler.DiggerJobStarted:
 		return "in_progress", nil
@@ -255,6 +263,9 @@ func GetCheckRunStatusForJob(job *DiggerJob) (string, error) {
 }
 
 func GetCheckRunConclusionForJob(job *DiggerJob) (string, error) {
+	if job.DependencyStopPending() {
+		return "", nil
+	}
 	if job.DependencyRetiredAt != nil {
 		return "skipped", nil
 	}
@@ -282,6 +293,12 @@ func GetCheckRunConclusionForJob(job *DiggerJob) (string, error) {
 
 // DependencySkipReason is display text, not a replacement for provenance proof.
 func (j *DiggerJob) DependencySkipReason() string {
+	if j.DependencyRetirementOperationID != nil {
+		if j.DependencyStopPending() {
+			return "future dispatch stopped; prior execution unknown; settlement pending"
+		}
+		return "future dispatch stopped; prior execution unknown; settled under merged-PR/stopped-Actions policy"
+	}
 	if j.DependencyRetiredAt == nil {
 		return ""
 	}

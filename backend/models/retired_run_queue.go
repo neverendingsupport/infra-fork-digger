@@ -22,6 +22,13 @@ func (db *Database) SettleFailedRunQueueItem(item *DiggerRunQueueItem, job *Digg
 		if current.Status != scheduler.DiggerJobFailed {
 			return errors.New("job is not terminally failed")
 		}
+		jobs := []DiggerJob{current}
+		if err := loadDependencyStops(tx, jobs); err != nil {
+			return err
+		}
+		if jobs[0].DependencyStopPending() {
+			return ErrDependencyStopPending
+		}
 		var run DiggerRun
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&run, item.DiggerRunId).Error; err != nil {
 			return err

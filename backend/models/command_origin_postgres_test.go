@@ -216,6 +216,7 @@ func TestCommandOriginPostgresMigrationCompatibility(t *testing.T) {
 
 	// Exercise current runtime methods only after applying its full schema.
 	commandOriginApplySQL(t, db.GormDB, filepath.Join("..", "migrations", "20261112040000_dependency_retirement.sql"))
+	commandOriginApplySQL(t, db.GormDB, filepath.Join("..", "migrations", "20261112090000_historical_dependency_stop.sql"))
 	// A deployed binary starts with fresh driver statement caches after DDL.
 	db.GormDB = commandOriginPostgresConnect(t, db.GormDB.Dialector.(*postgres.Dialector).DSN)
 

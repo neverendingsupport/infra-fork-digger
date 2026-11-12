@@ -39,9 +39,24 @@ jobs:
             backend/go.sum
             ee/backend/go.sum
             libs/go.sum
+            cli/go.sum
+      - name: Build the stopped-runner subprocess control
+        working-directory: cli
+        run: |
+          cat > "$RUNNER_TEMP/digger-stop-tests.work" <<EOF
+          go 1.25.0
+          use (
+            $GITHUB_WORKSPACE/backend
+            $GITHUB_WORKSPACE/cli
+            $GITHUB_WORKSPACE/libs
+            $GITHUB_WORKSPACE/drift
+          )
+          EOF
+          GOWORK="$RUNNER_TEMP/digger-stop-tests.work" go test -mod=readonly -c -o "$RUNNER_TEMP/digger-stopped-runner.test" ./pkg/spec
+          echo "DIGGER_LEGACY_STOP_RUNNER_TEST_BINARY=$RUNNER_TEMP/digger-stopped-runner.test" >> "$GITHUB_ENV"
       - name: Verify database and scheduling contracts
         working-directory: backend
-        run: go test -mod=readonly ./models ./services ./controllers ./tasks
+        run: go test -mod=readonly ./models ./services ./controllers ./tasks ./utils
       - name: Verify skipped work remains visible in CLI reports
         working-directory: libs
         run: go test -mod=readonly ./comment_utils/summary

@@ -29,10 +29,14 @@ func (db *Database) ClaimDiggerJobDispatch(job *DiggerJob) (bool, error) {
 
 // QueueDiggerJobIfCreated cannot move a concurrent dispatch back into the queue.
 func (db *Database) QueueDiggerJobIfCreated(job *DiggerJob) (bool, error) {
-	result := db.GormDB.Model(&DiggerJob{}).
-		Where("id = ? AND digger_job_id = ? AND batch_id = ? AND status = ? AND workflow_dispatch_started_at IS NULL AND dependency_retired_at IS NULL",
-			job.ID, job.DiggerJobID, job.BatchID, scheduler.DiggerJobCreated).
-		Updates(map[string]interface{}{"status": scheduler.DiggerJobQueuedForRun, "status_updated_at": time.Now().UTC()})
+	// Advance the read-only revision in SQL, just as the callback writer does.
+	// The status/claim/fence predicates make concurrent retries effective once.
+	now := time.Now().UTC()
+	result := db.GormDB.Exec(`UPDATE digger_jobs
+		SET status = ?, status_updated_at = ?, updated_at = ?, callback_revision = callback_revision + 1
+		WHERE id = ? AND digger_job_id = ? AND batch_id = ? AND status = ?
+		AND deleted_at IS NULL AND workflow_dispatch_started_at IS NULL AND dependency_retired_at IS NULL`,
+		scheduler.DiggerJobQueuedForRun, now, now, job.ID, job.DiggerJobID, job.BatchID, scheduler.DiggerJobCreated)
 	return result.RowsAffected == 1, result.Error
 }
 

@@ -1,0 +1,526 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:digger:execution-outcome:future-dispatch-fenced:v1",
+  "title": "Historical future-dispatch stop outcome v1, contract revision 3",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "kind": {
+      "const": "future_dispatch_fenced"
+    },
+    "reason": {
+      "const": "failed_dependency"
+    },
+    "prerequisite_job_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 50
+    },
+    "retired_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "dispatch_fenced": {
+      "const": true
+    },
+    "prior_execution": {
+      "const": "unknown"
+    },
+    "fence_id": {
+      "type": "string",
+      "format": "uuid",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "recovery_id": {
+      "type": "string",
+      "format": "uuid",
+      "not": {
+        "const": "00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "plan_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "settlement_policy": {
+      "const": "merged_pr_all_actions_stopped_v1"
+    },
+    "settlement_state": {
+      "enum": [
+        "fenced_pending_verification",
+        "verified"
+      ]
+    },
+    "binding": {
+      "$ref": "#/$defs/binding"
+    },
+    "verified_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "settlement": {
+      "$ref": "#/$defs/settlement"
+    },
+    "contract_revision": {
+      "const": 3
+    }
+  },
+  "required": [
+    "version",
+    "kind",
+    "reason",
+    "prerequisite_job_id",
+    "retired_at",
+    "dispatch_fenced",
+    "prior_execution",
+    "fence_id",
+    "recovery_id",
+    "plan_sha256",
+    "settlement_policy",
+    "settlement_state",
+    "binding",
+    "contract_revision"
+  ],
+  "$defs": {
+    "manifest_entry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "db_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "job_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50
+        },
+        "project": {
+          "type": "string",
+          "minLength": 1
+        },
+        "project_check_id": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*$"
+        }
+      },
+      "required": [
+        "db_id",
+        "job_id",
+        "project",
+        "project_check_id"
+      ]
+    },
+    "prerequisite": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "db_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "job_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50
+        },
+        "project": {
+          "type": "string",
+          "minLength": 1
+        },
+        "project_check_id": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*$"
+        },
+        "workflow_run_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "workflow_run_attempt": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "required": [
+        "db_id",
+        "job_id",
+        "project",
+        "project_check_id",
+        "workflow_run_id",
+        "workflow_run_attempt"
+      ]
+    },
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "digger_repository_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "repository_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "repo_full_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "pr_number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "source_comment_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "body_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "commit_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "command": {
+          "enum": [
+            "plan",
+            "apply"
+          ]
+        },
+        "batch_id": {
+          "type": "string",
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "aggregate_check_id": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*$"
+        },
+        "target": {
+          "$ref": "#/$defs/manifest_entry"
+        },
+        "manifest": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 500,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/manifest_entry"
+          }
+        },
+        "report_comment_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "original_prerequisite": {
+          "$ref": "#/$defs/prerequisite"
+        }
+      },
+      "required": [
+        "digger_repository_id",
+        "repository_id",
+        "repo_full_name",
+        "pr_number",
+        "source_comment_id",
+        "body_sha256",
+        "commit_sha",
+        "command",
+        "batch_id",
+        "aggregate_check_id",
+        "target",
+        "original_prerequisite",
+        "manifest",
+        "report_comment_id"
+      ]
+    },
+    "settlement": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "pr_number": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "state": {
+          "const": "closed"
+        },
+        "merged": {
+          "const": true
+        },
+        "pr_head_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "merge_commit_sha": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "provider_checked_from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "provider_checked_through": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "actions_complete": {
+          "const": true
+        },
+        "active_actions": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "queued": {
+              "const": 0
+            },
+            "in_progress": {
+              "const": 0
+            },
+            "requested": {
+              "const": 0
+            },
+            "waiting": {
+              "const": 0
+            },
+            "pending": {
+              "const": 0
+            }
+          },
+          "required": [
+            "queued",
+            "in_progress",
+            "requested",
+            "waiting",
+            "pending"
+          ]
+        },
+        "checkpoint_id": {
+          "type": "string",
+          "format": "uuid",
+          "not": {
+            "const": "00000000-0000-0000-0000-000000000000"
+          }
+        },
+        "input_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "local_state_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "original_failure": {
+          "$ref": "#/$defs/original_failure"
+        },
+        "current_root": {
+          "$ref": "#/$defs/current_root"
+        },
+        "jobs": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 500,
+          "items": {
+            "$ref": "#/$defs/current_job"
+          }
+        }
+      },
+      "required": [
+        "pr_number",
+        "state",
+        "merged",
+        "pr_head_sha",
+        "merge_commit_sha",
+        "provider_checked_from",
+        "provider_checked_through",
+        "actions_complete",
+        "active_actions",
+        "checkpoint_id",
+        "input_sha256",
+        "local_state_sha256",
+        "original_failure",
+        "current_root",
+        "jobs"
+      ]
+    },
+    "current_job": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "db_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "job_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50
+        },
+        "project": {
+          "type": "string",
+          "minLength": 1
+        },
+        "project_check_id": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*$"
+        },
+        "status": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 6
+        },
+        "workflow_url": {
+          "type": "string"
+        },
+        "workflow_run_id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "workflow_run_attempt": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "db_id",
+        "job_id",
+        "project",
+        "project_check_id",
+        "status",
+        "workflow_url",
+        "workflow_run_id",
+        "workflow_run_attempt"
+      ]
+    },
+    "original_failure": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "workflow_run_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "workflow_run_attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "workflow_status": {
+          "const": "completed"
+        },
+        "workflow_conclusion": {
+          "const": "failure"
+        }
+      },
+      "required": [
+        "workflow_run_id",
+        "workflow_run_attempt",
+        "workflow_status",
+        "workflow_conclusion"
+      ]
+    },
+    "current_root": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "db_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "job_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 50
+        },
+        "project": {
+          "type": "string",
+          "minLength": 1
+        },
+        "project_check_id": {
+          "type": "string",
+          "pattern": "^[1-9][0-9]*$"
+        },
+        "status": {
+          "enum": [
+            3,
+            5
+          ]
+        },
+        "workflow_url": {
+          "type": "string"
+        },
+        "workflow_run_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "workflow_run_attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "workflow_status": {
+          "const": "completed"
+        },
+        "workflow_conclusion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 100
+        }
+      },
+      "required": [
+        "db_id",
+        "job_id",
+        "project",
+        "project_check_id",
+        "status",
+        "workflow_url",
+        "workflow_run_id",
+        "workflow_run_attempt",
+        "workflow_status",
+        "workflow_conclusion"
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "settlement_state": {
+            "const": "verified"
+          }
+        },
+        "required": [
+          "settlement_state"
+        ]
+      },
+      "then": {
+        "required": [
+          "verified_at",
+          "settlement"
+        ]
+      },
+      "else": {
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "verified_at"
+              ]
+            },
+            {
+              "required": [
+                "settlement"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "$comment": "Frozen consumer DTO, not authorization to perform a live operation. Cross-field equality, complete source/manifest validation, phase timing and fresh provider policy checks are mandatory as described in digger-legacy-outcome-examples.md. Native never_dispatched DTO is unchanged."
+}

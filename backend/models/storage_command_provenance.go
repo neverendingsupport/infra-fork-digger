@@ -1,6 +1,7 @@
 package models
 
 import (
+	"database/sql"
 	"errors"
 	"log/slog"
 	"slices"
@@ -38,15 +39,27 @@ type CommandProvenanceOrigin struct {
 	Command         scheduler.DiggerCommand `json:"command"`
 }
 
-// ExecutionOutcome is proof of permanently fenced, never-dispatched work.
-// It is independent of numeric status so version-1 readers remain conservative.
+// ExecutionOutcome distinguishes qualified never-dispatched work from a legacy
+// future-dispatch stop whose prior execution remains unknown.
+// Readers must recognize the nested kind; numeric failure alone never grants
+// historical settlement permission.
 type ExecutionOutcome struct {
-	Version           int       `json:"version"`
-	Kind              string    `json:"kind"`
-	Reason            string    `json:"reason"`
-	PrerequisiteJobID string    `json:"prerequisite_job_id"`
-	RetiredAt         time.Time `json:"retired_at"`
-	DispatchFenced    bool      `json:"dispatch_fenced"`
+	ContractRevision  int                              `json:"contract_revision,omitempty"`
+	Version           int                              `json:"version"`
+	Kind              string                           `json:"kind"`
+	Reason            string                           `json:"reason"`
+	PrerequisiteJobID string                           `json:"prerequisite_job_id"`
+	RetiredAt         time.Time                        `json:"retired_at"`
+	DispatchFenced    bool                             `json:"dispatch_fenced"`
+	PriorExecution    string                           `json:"prior_execution,omitempty"`
+	RecoveryID        string                           `json:"recovery_id,omitempty"`
+	FenceID           string                           `json:"fence_id,omitempty"`
+	PlanSHA256        string                           `json:"plan_sha256,omitempty"`
+	Binding           *DependencyStopOutcomeBinding    `json:"binding,omitempty"`
+	SettlementPolicy  string                           `json:"settlement_policy,omitempty"`
+	SettlementState   string                           `json:"settlement_state,omitempty"`
+	VerifiedAt        *time.Time                       `json:"verified_at,omitempty"`
+	Settlement        *DependencyStopOutcomeSettlement `json:"settlement,omitempty"`
 }
 
 type CommandProvenanceJob struct {
@@ -90,7 +103,7 @@ func (db *Database) GetCommandProvenance(orgID uint, repoFullName string, prNumb
 			response.Batches = append(response.Batches, batch)
 		}
 		return nil
-	})
+	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {
 		return nil, err
 	}
@@ -124,6 +137,10 @@ func commandProvenanceBatch(tx *gorm.DB, origin BatchCommandOrigin) (CommandProv
 	if err != nil {
 		return result, err
 	}
+	effectiveHistoricalStatus(&batch, jobs)
+	if batchMatches {
+		result.Status = batch.Status
+	}
 	currentManifest, manifestErr := commandOriginManifest(origin, jobs)
 	result.ManifestComplete = origin.Sealed && batchMatches && manifestErr == nil && slices.Equal(currentManifest, origin.JobManifest)
 	if !result.ManifestComplete {
@@ -145,7 +162,17 @@ func commandProvenanceBatch(tx *gorm.DB, origin BatchCommandOrigin) (CommandProv
 			// Legacy zero values are explicitly unknown, even when a URL exists.
 			out.WorkflowRunID = job.WorkflowRunID
 			out.WorkflowRunAttempt = job.WorkflowRunAttempt
-			if result.ManifestComplete && job.DispatchProtocolVersion == 1 && job.DependencyRetiredAt != nil && job.DependencyFailureJobID != "" && !jobHasExecutionEvidence(job) && job.Status == scheduler.DiggerJobFailed {
+			if result.ManifestComplete && job.DependencyRetirementOperationID != nil && job.DependencyStop != nil {
+				stop := job.DependencyStop
+				var links int64
+				if err := tx.Unscoped().Model(&GithubDiggerJobLink{}).Where("digger_job_id = ? AND (github_job_id <> 0 OR github_workflow_run_id <> 0)", job.DiggerJobID).Count(&links).Error; err != nil {
+					return result, err
+				}
+				if links == 0 && batch.CommentId != nil && stop.Snapshot.ReportCommentID == *batch.CommentId && dependencyStopMatchesJob(*stop, job) && stop.Snapshot.AggregateCheckID == result.AggregateCheckID && stop.Snapshot.Origin == result.Origin && slices.Equal(stop.Snapshot.Manifest, origin.JobManifest) {
+					out.ExecutionOutcome = dependencyStopOutcome(*stop, job)
+				}
+			}
+			if result.ManifestComplete && job.DependencyRetirementOperationID == nil && job.DispatchProtocolVersion == 1 && job.DependencyRetiredAt != nil && job.DependencyFailureJobID != "" && !jobHasExecutionEvidence(job) && job.Status == scheduler.DiggerJobFailed {
 				linked, err := jobHasWorkflowLink(tx, job.DiggerJobID)
 				if err != nil {
 					return result, err

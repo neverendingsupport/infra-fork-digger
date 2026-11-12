@@ -163,6 +163,14 @@ func GenerateChecksSummaryForJob(job *models.DiggerJob) (string, error) {
 }
 
 func UpdateCheckRunForBatch(gh utils.GithubClientProvider, batch *models.DiggerBatch, aiSummaryEnabled bool) error {
+	publication, authorizationErr := utils.HistoricalPublication(batch)
+	if authorizationErr != nil {
+		return authorizationErr
+	}
+	if publication != nil {
+		batch = &publication.Batch
+	}
+
 	slog.Info("Updating PR status for batch",
 		"batchId", batch.ID,
 		"prNumber", batch.PrNumber,
@@ -281,7 +289,7 @@ func UpdateCheckRunForBatch(gh utils.GithubClientProvider, batch *models.DiggerB
 			&message,
 			utils.GetActionsForBatch(batch),
 		}
-		_, err = ghPrService.UpdateCheckRun(*batch.CheckRunId, opts)
+		_, err = utils.PublishBatchCheck(ghPrService, batch, *batch.CheckRunId, opts)
 		if err != nil {
 			slog.Warn("GitHub Check Run API call failed for batch plan",
 				"operation", "UpdateCheckRun",
@@ -346,7 +354,7 @@ func UpdateCheckRunForBatch(gh utils.GithubClientProvider, batch *models.DiggerB
 				} else {
 					for _, checkRun := range checkRuns {
 						if checkRun.GetName() == "digger/apply" {
-							_, err = ghPrService.UpdateCheckRun(fmt.Sprintf("%d", checkRun.GetID()), applyOpts)
+							_, err = utils.PublishBatchCheck(ghPrService, batch, fmt.Sprintf("%d", checkRun.GetID()), applyOpts)
 							if err != nil {
 								slog.Warn("Failed to auto-succeed apply check for zero-change plan",
 									"batchId", batch.ID,
@@ -378,7 +386,7 @@ func UpdateCheckRunForBatch(gh utils.GithubClientProvider, batch *models.DiggerB
 				&message,
 				utils.GetActionsForBatch(batch),
 			}
-			_, err = ghPrService.UpdateCheckRun(*batch.CheckRunId, opts)
+			_, err = utils.PublishBatchCheck(ghPrService, batch, *batch.CheckRunId, opts)
 			if err != nil {
 				slog.Warn("GitHub Check Run API call failed for batch apply",
 					"operation", "UpdateCheckRun",
@@ -403,6 +411,25 @@ func UpdateCheckRunForBatch(gh utils.GithubClientProvider, batch *models.DiggerB
 
 // more modern check runs on github have their own page
 func UpdateCheckRunForJob(gh utils.GithubClientProvider, job *models.DiggerJob, aiSummaryEnabled bool) error {
+	publication, authorizationErr := utils.HistoricalPublication(job.Batch)
+	if authorizationErr != nil {
+		return authorizationErr
+	}
+	if publication != nil {
+		found := false
+		for i := range publication.Jobs {
+			if publication.Jobs[i].ID == job.ID && publication.Jobs[i].DiggerJobID == job.DiggerJobID {
+				job = &publication.Jobs[i]
+				job.Batch = &publication.Batch
+				found = true
+				break
+			}
+		}
+		if !found {
+			return models.ErrDependencyStopConflict
+		}
+	}
+
 	batch := job.Batch
 	slog.Info("Updating PR Check run for job",
 		"jobId", job.DiggerJobID,
@@ -536,6 +563,10 @@ func UpdateCheckRunForJob(gh utils.GithubClientProvider, job *models.DiggerJob, 
 		}
 	}
 
+	if job.DependencyRetirementOperationID != nil {
+		summary = job.DependencySkipReason()
+		text = summary
+	}
 	slog.Debug("Updating PR status for job", "jobId", job.DiggerJobID, "status", status, "conclusion", conclusion)
 	if isPlan {
 		title := fmt.Sprintf("%v to create %v to update %v to delete", job.DiggerJobSummary.ResourcesCreated, job.DiggerJobSummary.ResourcesUpdated, job.DiggerJobSummary.ResourcesDeleted)
@@ -547,7 +578,7 @@ func UpdateCheckRunForJob(gh utils.GithubClientProvider, job *models.DiggerJob, 
 			Text:       &text,
 			Actions:    utils.GetActionsForJob(job),
 		}
-		_, err = ghService.UpdateCheckRun(*job.CheckRunId, opts)
+		_, err = utils.PublishBatchCheck(ghService, batch, *job.CheckRunId, opts)
 		if err != nil {
 			slog.Warn("GitHub Check Run API call failed for job plan",
 				"operation", "UpdateCheckRun",
@@ -576,7 +607,7 @@ func UpdateCheckRunForJob(gh utils.GithubClientProvider, job *models.DiggerJob, 
 			Text:       &text,
 			Actions:    utils.GetActionsForJob(job),
 		}
-		_, err = ghService.UpdateCheckRun(*job.CheckRunId, opts)
+		_, err = utils.PublishBatchCheck(ghService, batch, *job.CheckRunId, opts)
 		if err != nil {
 			slog.Warn("GitHub Check Run API call failed for job apply",
 				"operation", "UpdateCheckRun",

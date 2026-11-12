@@ -126,7 +126,11 @@ func (gh DiggerGithubClientMockProvider) FetchCredentials(githubAppId string) (s
 }
 
 func GetGithubClient(gh GithubClientProvider, installationId int64, repoFullName string) (*github.Client, *string, error) {
-	installation, err := models.DB.GetGithubAppInstallationByIdAndRepo(installationId, repoFullName)
+	return getGithubClient(models.DB, gh, installationId, repoFullName)
+}
+
+func getGithubClient(db *models.Database, gh GithubClientProvider, installationId int64, repoFullName string) (*github.Client, *string, error) {
+	installation, err := db.GetGithubAppInstallationByIdAndRepo(installationId, repoFullName)
 	if err != nil {
 		slog.Error("Failed to get GitHub installation",
 			"installationId", installationId,
@@ -146,7 +150,11 @@ func GetGithubClientFromAppId(gh GithubClientProvider, installationId int64, git
 }
 
 func GetGithubService(gh GithubClientProvider, installationId int64, repoFullName string, repoOwner string, repoName string) (*github2.GithubService, *string, error) {
-	ghClient, token, err := GetGithubClient(gh, installationId, repoFullName)
+	return getGithubService(models.DB, gh, installationId, repoFullName, repoOwner, repoName)
+}
+
+func getGithubService(db *models.Database, gh GithubClientProvider, installationId int64, repoFullName, repoOwner, repoName string) (*github2.GithubService, *string, error) {
+	ghClient, token, err := getGithubClient(db, gh, installationId, repoFullName)
 	if err != nil {
 		slog.Error("Failed to create GitHub client",
 			"installationId", installationId,
@@ -286,7 +294,7 @@ func SetPRCheckForJobs(ghService *github2.GithubService, prNumber int, jobs []sc
 					return nil, nil, fmt.Errorf("Error setting pr status: %v", err)
 				}
 				jobCheckRunIds[job.ProjectName] = CheckRunData{
-					Id: strconv.FormatInt(*cr.ID, 10),
+					Id:  strconv.FormatInt(*cr.ID, 10),
 					Url: GetCheckDetailedUrl(*cr.ID, repoOwner, repoName, prNumber),
 				}
 
@@ -305,7 +313,7 @@ func SetPRCheckForJobs(ghService *github2.GithubService, prNumber int, jobs []sc
 					return nil, nil, fmt.Errorf("Error setting pr status: %v", err)
 				}
 				jobCheckRunIds[job.ProjectName] = CheckRunData{
-					Id: strconv.FormatInt(*cr.ID, 10),
+					Id:  strconv.FormatInt(*cr.ID, 10),
 					Url: GetCheckDetailedUrl(*cr.ID, repoOwner, repoName, prNumber),
 				}
 			}
@@ -328,7 +336,7 @@ func SetPRCheckForJobs(ghService *github2.GithubService, prNumber int, jobs []sc
 				return nil, nil, fmt.Errorf("error setting pr status: %v", err)
 			}
 			batchCheckRunId = CheckRunData{
-				Id: strconv.FormatInt(*cr.ID, 10),
+				Id:  strconv.FormatInt(*cr.ID, 10),
 				Url: GetCheckDetailedUrl(*cr.ID, repoOwner, repoName, prNumber),
 			}
 
@@ -354,7 +362,7 @@ func SetPRCheckForJobs(ghService *github2.GithubService, prNumber int, jobs []sc
 				return nil, nil, fmt.Errorf("error setting pr status: %v", err)
 			}
 			batchCheckRunId = CheckRunData{
-				Id: strconv.FormatInt(*cr.ID, 10),
+				Id:  strconv.FormatInt(*cr.ID, 10),
 				Url: GetCheckDetailedUrl(*cr.ID, repoOwner, repoName, prNumber),
 			}
 		}
@@ -378,15 +386,16 @@ func SetPRCheckForJobs(ghService *github2.GithubService, prNumber int, jobs []sc
 }
 
 type CheckedRunActionIdentifier string
-const CheckedRunActionBatchApply CheckedRunActionIdentifier  = "abatch"
-const CheckedRunActionJobApply CheckedRunActionIdentifier  = "ajob"
+
+const CheckedRunActionBatchApply CheckedRunActionIdentifier = "abatch"
+const CheckedRunActionJobApply CheckedRunActionIdentifier = "ajob"
 
 func GetActionsForBatch(batch *models.DiggerBatch) []*github.CheckRunAction {
 	batchActions := make([]*github.CheckRunAction, 0)
 	if batch.Status == scheduler.BatchJobSucceeded {
 		batchActions = append(batchActions, &github.CheckRunAction{
-			Label:       "Apply all", // max 20 chars
-			Description: "Apply all jobs", // max 40 chars
+			Label:       "Apply all",                                                           // max 20 chars
+			Description: "Apply all jobs",                                                      // max 40 chars
 			Identifier:  fmt.Sprintf("%v:%v", CheckedRunActionBatchApply, batch.DiggerBatchID), // max 20 chars
 		})
 	}
@@ -398,8 +407,8 @@ func GetActionsForJob(job *models.DiggerJob) []*github.CheckRunAction {
 	if job.Status == scheduler.DiggerJobSucceeded {
 		batch := job.Batch
 		batchActions = append(batchActions, &github.CheckRunAction{
-			Label:       "Apply all", // max 20 chars
-			Description: "Apply all jobs", // max 40 chars
+			Label:       "Apply all",                                                           // max 20 chars
+			Description: "Apply all jobs",                                                      // max 40 chars
 			Identifier:  fmt.Sprintf("%v:%v", CheckedRunActionBatchApply, batch.DiggerBatchID), // max 20 chars
 		})
 		// TODO: in the future when we support "apply single job we can add this

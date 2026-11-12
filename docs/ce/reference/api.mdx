@@ -52,3 +52,7 @@ PUT /orgs/:organisation/access-policy
 ```
 
 For these requests, your request body should contain a policy document written as an OPA policy with package digger and expected to have the "allow" rule.
+
+## Historical dependent stop
+
+The internal `POST /api/repos/:repo_id/batches/:batch_id/retire-failed-dependents` route provides read-only plan, permanent fence and separate stopped-work verification modes. New fences default to disabled. See [Stop a historical dependent](/ce/reference/historical-dependency-stop) for the request, deployment cutover gate, audit identities, retry behavior and the distinct revision-3 `future_dispatch_fenced` outcome. Reuse the original request for fresh verification after a stopped parent rerun; immutable checkpoints keep original cause and current settlement evidence separate. Consumer access remains the source-scoped provenance GET; this route grants no CLI JWT or read-only JWT mutation authority.

@@ -9,7 +9,6 @@ import (
 	"github.com/diggerhq/digger/libs/scheduler"
 	"github.com/google/uuid"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 )
 
 var ErrDiggerJobRetired = errors.New("job permanently retired after failed prerequisite")
@@ -57,64 +56,11 @@ func (db *Database) ReconcileCommandDependencies(orgID uint, repo string, pr int
 func (db *Database) reconcileFailedDependencies(batchID uuid.UUID, verify func(*gorm.DB, DiggerBatch) error) (*DependencyReconciliation, error) {
 	result := &DependencyReconciliation{RetiredJobs: []string{}, UnresolvedJobs: []string{}, UnresolvedReasons: map[string]string{}}
 	err := db.GormDB.Transaction(func(tx *gorm.DB) error {
-		var batch DiggerBatch
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&batch, "id = ?", batchID).Error; err != nil {
+		graph, err := lockDependencyGraph(tx, batchID)
+		if err != nil {
 			return err
 		}
-		var jobs []DiggerJob
-		if err := tx.Unscoped().Clauses(clause.Locking{Strength: "UPDATE"}).Where("batch_id = ?", batchID.String()).Order("id ASC").Limit(MaxCommandProvenanceJobs + 1).Find(&jobs).Error; err != nil {
-			return err
-		}
-		if len(jobs) > MaxCommandProvenanceJobs {
-			return ErrProvenanceTooLarge
-		}
-		byID := map[string]*DiggerJob{}
-		ids := make([]string, 0, len(jobs))
-		for i := range jobs {
-			job := &jobs[i]
-			if job.DeletedAt.Valid || job.DiggerJobID == "" || byID[job.DiggerJobID] != nil {
-				return errors.New("dependency graph has missing or duplicate job identities")
-			}
-			byID[job.DiggerJobID] = job
-			ids = append(ids, job.DiggerJobID)
-		}
-		var links []DiggerJobParentLink
-		if len(ids) > 0 {
-			if err := tx.Where("digger_job_id IN ? OR parent_digger_job_id IN ?", ids, ids).Find(&links).Error; err != nil {
-				return err
-			}
-		}
-		parents := map[string][]string{}
-		for _, link := range links {
-			if byID[link.DiggerJobId] == nil || byID[link.ParentDiggerJobId] == nil {
-				return errors.New("dependency graph crosses batch or has missing job")
-			}
-			parents[link.DiggerJobId] = append(parents[link.DiggerJobId], link.ParentDiggerJobId)
-		}
-		// Validate the whole graph before persisting any fence.
-		visited, visiting := map[string]bool{}, map[string]bool{}
-		var visit func(string) error
-		visit = func(id string) error {
-			if visiting[id] {
-				return errors.New("dependency graph contains a cycle")
-			}
-			if visited[id] {
-				return nil
-			}
-			visiting[id] = true
-			for _, parent := range parents[id] {
-				if err := visit(parent); err != nil {
-					return err
-				}
-			}
-			visiting[id], visited[id] = false, true
-			return nil
-		}
-		for _, id := range ids {
-			if err := visit(id); err != nil {
-				return err
-			}
-		}
+		batch, jobs, byID, parents := graph.Batch, graph.Jobs, graph.ByID, graph.Parents
 		if verify != nil {
 			if err := verify(tx, batch); err != nil {
 				return err
@@ -129,7 +75,7 @@ func (db *Database) reconcileFailedDependencies(batchID uuid.UUID, verify func(*
 			}
 			for _, parentID := range parents[id] {
 				parent := byID[parentID]
-				if parent.DependencyRetiredAt != nil || (parent.Status == scheduler.DiggerJobFailed && parent.WorkflowRunID > 0 && parent.WorkflowRunAttempt > 0) {
+				if (parent.DependencyRetiredAt != nil && parent.DependencyRetirementOperationID == nil) || (parent.Status == scheduler.DiggerJobFailed && parent.WorkflowRunID > 0 && parent.WorkflowRunAttempt > 0) {
 					failures[id] = parentID
 					return parentID
 				}
@@ -184,6 +130,12 @@ func (db *Database) reconcileFailedDependencies(batchID uuid.UUID, verify func(*
 		for _, job := range jobs {
 			if job.DependencyRetiredAt != nil {
 				result.RetiredJobs = append(result.RetiredJobs, job.DiggerJobID)
+			}
+			if job.DependencyStopPending() {
+				allTerminal = false
+				result.UnresolvedJobs = append(result.UnresolvedJobs, job.DiggerJobID)
+				result.UnresolvedReasons[job.DiggerJobID] = "historical_stop_pending_verification"
+				continue
 			}
 			switch job.Status {
 			case scheduler.DiggerJobFailed:
