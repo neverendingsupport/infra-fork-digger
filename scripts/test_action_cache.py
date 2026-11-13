@@ -1,51 +1,12 @@
 #!/usr/bin/env python3
-"""Exercise the provider-cache shell embedded in action.yml.
-
-Needs PyYAML (python3-yaml on Ubuntu runners).
-"""
+"""Exercise the provider-cache shell embedded in action.yml."""
 
 from pathlib import Path
 import os
-import subprocess
 import tempfile
 import unittest
 
-import yaml
-
-
-ROOT = Path(__file__).resolve().parents[1]
-ACTION = yaml.safe_load((ROOT / "action.yml").read_text())
-STEPS = ACTION["runs"]["steps"]
-
-
-def step(step_id):
-    for s in STEPS:
-        if s.get("id") == step_id:
-            return s
-    raise AssertionError(f"action.yml has no step with id {step_id!r}")
-
-
-def read_pairs(path):
-    return dict(line.split("=", 1) for line in path.read_text().splitlines())
-
-
-def run_step(step_id, env):
-    """Run a step's script; return the result and its GITHUB_OUTPUT and GITHUB_ENV."""
-    with tempfile.TemporaryDirectory() as scratch:
-        output = Path(scratch) / "output"
-        github_env = Path(scratch) / "env"
-        output.touch()
-        github_env.touch()
-        full_env = os.environ.copy()
-        full_env.update(env, GITHUB_OUTPUT=str(output), GITHUB_ENV=str(github_env))
-        result = subprocess.run(
-            ["bash", "-c", step(step_id)["run"]],
-            cwd=ROOT,
-            env=full_env,
-            capture_output=True,
-            text=True,
-        )
-        return result, read_pairs(output), read_pairs(github_env)
+from action_harness import STEPS, run_step, step, step_named
 
 
 class CacheSettingsTest(unittest.TestCase):
@@ -181,7 +142,7 @@ class CacheKeyTest(unittest.TestCase):
                 self.assertNotEqual(self.key(cache, event=event), "", event)
 
     def test_save_runs_only_with_a_key(self):
-        save = next(s for s in STEPS if s.get("name") == "cache-save")
+        save = step_named("cache-save")
         cache_dir = "${{ steps.cache-settings.outputs.cache-dir }}"
         self.assertEqual(save["if"], "${{ success() && steps.cache-key.outputs.key != '' }}")
         self.assertEqual(save["with"], {"path": cache_dir, "key": "${{ steps.cache-key.outputs.key }}"})

@@ -2,7 +2,7 @@
 title: "Action inputs"
 ---
 
-Full list of supported options from [action.yml](https://github.com/diggerhq/digger/blob/develop/action.yml)
+Full list of supported options from [action.yml](https://github.com/diggerhq/digger/blob/develop/action.yml). `digger-release-repository` and `digger-cli-sha256` exist only in the NES fork's `action.yml` so far.
 
 ```
 inputs:
@@ -67,6 +67,26 @@ inputs:
     description: Terragrunt version
     required: false
     default: v0.55.5
+  digger-version:
+    description: "Pre-compiled version of digger CLI to install. Must correspond to a valid release tag (vX.Y.Z, optionally with a path prefix and a -suffix, such as cli/v1.2.3-myorg.1). This value overrides the version derived from the github.action_ref."
+    required: false
+    default: ''
+  digger-release-repository:
+    description: "GitHub repository (owner/name) whose release digger-version names. Only used when the action downloads a prebuilt CLI. Anything other than diggerhq/digger requires digger-cli-sha256."
+    required: false
+    default: 'diggerhq/digger'
+  digger-cli-sha256:
+    description: "Expected SHA-256 of the downloaded CLI binary. When set, the action refuses to run a binary that doesn't match. Needs digger-version or a vX.Y.Z action ref, because a CLI built from source isn't checked; setting it without one fails the step."
+    required: false
+    default: ''
+  digger-os:
+    description: "OS part of the release asset name, case-sensitive: linux, darwin or freebsd, or Linux (the default, with X64). Not detected from the runner. For upstream's Windows assets, use windows with digger-arch set to amd64.exe, arm64.exe, 386.exe or arm.exe."
+    required: false
+    default: 'Linux'
+  digger-arch:
+    description: "Architecture part of the release asset name, case-sensitive: amd64, arm64, 386 or arm, or X64 (the default, with Linux). Not detected from the runner."
+    required: false
+    default: 'X64'
   opentofu-version:
     description: OpenTofu version
     required: false

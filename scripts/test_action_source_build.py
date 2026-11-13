@@ -8,22 +8,12 @@ import subprocess
 import tempfile
 import unittest
 
-
-ROOT = Path(__file__).resolve().parents[1]
-ACTION = ROOT / "action.yml"
+from action_harness import ROOT, step_named
 
 
 def source_build_script():
-    """Extract the run block for the production source-build step."""
-    lines = ACTION.read_text().splitlines()
-    step = lines.index("    - name: build and run digger")
-    run = lines.index("      run: |", step)
-    body = []
-    for line in lines[run + 1 :]:
-        if line and not line.startswith("        "):
-            break
-        body.append(line[8:] if line.startswith("        ") else "")
-    return "\n".join(body).replace(
+    """The run block of the production source-build step."""
+    return step_named("build and run digger")["run"].replace(
         "${{ inputs.ee }}", '"${TEST_EE}"'
     ).replace("${{ inputs.fips }}", '"${TEST_FIPS}"')
 

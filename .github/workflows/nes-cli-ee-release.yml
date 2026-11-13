@@ -1,0 +1,141 @@
+---
+name: NES CLI EE release
+
+# Fork-only workflow. Builds the EE CLI for linux/arm64 and linux/amd64 from a
+# release tag on nes-main and publishes it as a GitHub release, with a
+# .sha256 file and a build provenance attestation for each binary. The action
+# can then download it instead of compiling it in every job. No FIPS or
+# non-EE binaries are built.
+#
+# Release by pushing a tag on a nes-main commit:
+#
+#   git tag -a nes/cli-ee/v0.6.152-nes.1 -m "cli-ee v0.6.152-nes.1" <sha>
+#   git push origin nes/cli-ee/v0.6.152-nes.1
+#
+# The nes/ prefix keeps upstream's tag-triggered workflows from matching;
+# upstream's release-event workflows are disabled in this fork. The -nes.N
+# suffix marks our build of upstream's version. The whole tag is the release
+# name, and a workflow uses it as-is:
+#
+#   uses: neverendingsupport/infra-fork-digger@<the commit the release was built from>
+#   with:
+#     ee: "true"
+#     digger-version: nes/cli-ee/v0.6.152-nes.1
+#     digger-release-repository: neverendingsupport/infra-fork-digger
+#     digger-os: linux
+#     digger-arch: arm64
+#     digger-cli-sha256: <the release's digger-ee-cli-linux-arm64.sha256>
+#
+# Before copying a checksum, check the binary's attestation:
+#
+#   gh attestation verify digger-ee-cli-linux-arm64 \
+#     --repo neverendingsupport/infra-fork-digger \
+#     --signer-workflow neverendingsupport/infra-fork-digger/.github/workflows/nes-cli-ee-release.yml \
+#     --source-ref refs/tags/nes/cli-ee/v0.6.152-nes.1 --deny-self-hosted-runners
+#
+# The release notes name the commit it was built from. Pin the action to that
+# commit, so the action and the CLI come from the same source.
+
+on:
+  push:
+    tags:
+      - "nes/cli-ee/v*"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check the tag format
+        run: |
+          set -euo pipefail
+          if [[ ! "${GITHUB_REF_NAME}" =~ ^nes/cli-ee/v[0-9]+\.[0-9]+\.[0-9]+-nes\.[0-9]+$ ]]; then
+            echo "::error::${GITHUB_REF_NAME} isn't nes/cli-ee/vX.Y.Z-nes.N."
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # A tag can point anywhere, including a commit that never went through a
+      # nes-main PR. Only release what nes-main already contains. The full ref
+      # keeps a tag named nes-main from standing in for the branch.
+      - name: Refuse tags that aren't on nes-main
+        run: |
+          set -euo pipefail
+          git fetch --quiet --no-tags origin refs/heads/nes-main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" FETCH_HEAD; then
+            echo "::error::${GITHUB_REF_NAME} points at ${GITHUB_SHA}, which isn't on nes-main."
+            exit 1
+          fi
+      # A published binary keeps whatever standard library it was built with,
+      # so use the newest patch release of go.mod's minor version.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.25"
+          check-latest: true
+          cache: false
+      - name: Build
+        working-directory: ee/cli
+        env:
+          CGO_ENABLED: "0"
+          GOFLAGS: -mod=readonly -trimpath
+        run: |
+          set -euo pipefail
+          go version
+          for arch in arm64 amd64; do
+            GOOS=linux GOARCH="${arch}" go build -ldflags="-s -w -buildid=" \
+              -o "${GITHUB_WORKSPACE}/dist/digger-ee-cli-linux-${arch}" ./cmd/digger
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digger-ee-cli
+          path: dist/
+          if-no-files-found: error
+
+  # Only this job can write, and it runs no build tools.
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: digger-ee-cli
+          path: dist
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+      # Each .sha256 holds only the hash, the value digger-cli-sha256 takes.
+      - name: Write checksums
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          for bin in *; do
+            sha256sum < "${bin}" | cut -d' ' -f1 > "${bin}.sha256"
+            echo "${bin} $(cat "${bin}.sha256")"
+          done
+      # The tag could have moved since the build checked out GITHUB_SHA.
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          read -r type tagged < <(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${GITHUB_REF_NAME}" --jq '"\(.object.type) \(.object.sha)"')
+          while [[ "${type}" == tag ]]; do
+            read -r type tagged < <(gh api "repos/${GITHUB_REPOSITORY}/git/tags/${tagged}" --jq '"\(.object.type) \(.object.sha)"')
+          done
+          if [[ "${tagged}" != "${GITHUB_SHA}" ]]; then
+            echo "::error::${GITHUB_REF_NAME} now points at ${tagged}, not the ${GITHUB_SHA} this run built."
+            exit 1
+          fi
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --verify-tag \
+            --title "${GITHUB_REF_NAME}" \
+            --notes "EE CLI built from ${GITHUB_SHA}. Each binary has a .sha256 file and a build provenance attestation."

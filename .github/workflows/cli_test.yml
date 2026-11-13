@@ -25,11 +25,8 @@ jobs:
       - name: Check out code into the Go module directory
         uses: actions/checkout@v7
 
-      - name: Test source-build action CLI selection
-        run: python3 scripts/test_action_source_build.py
-
-      - name: Test action provider cache settings
-        run: python3 scripts/test_action_cache.py
+      - name: Test the shell in action.yml
+        run: python3 -m unittest discover -s scripts -p 'test_action*.py'
 
       - name: Deps
         run: |

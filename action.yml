@@ -255,15 +255,23 @@ inputs:
     required: false
     default: ""
   digger-version:
-    description: "Pre-compiled version of digger CLI to install. Must correspond to a valid release tag (vX.Y.Z). This value overrides the version derived from the github.action_ref."
+    description: "Pre-compiled version of digger CLI to install. Must correspond to a valid release tag (vX.Y.Z, optionally with a path prefix and a -suffix, such as cli/v1.2.3-myorg.1). This value overrides the version derived from the github.action_ref."
+    required: false
+    default: ""
+  digger-release-repository:
+    description: "GitHub repository (owner/name) whose release digger-version names. Only used when the action downloads a prebuilt CLI. Anything other than diggerhq/digger requires digger-cli-sha256."
+    required: false
+    default: "diggerhq/digger"
+  digger-cli-sha256:
+    description: "Expected SHA-256 of the downloaded CLI binary. When set, the action refuses to run a binary that doesn't match. Needs digger-version or a vX.Y.Z action ref, because a CLI built from source isn't checked; setting it without one fails the step."
     required: false
     default: ""
   digger-os:
-    description: "OS variant of the digger CLI to install. Valid configurable values are: windows, linux, darwin, freebsd."
+    description: "OS part of the release asset name, case-sensitive: linux, darwin or freebsd, or Linux (the default, with X64). Not detected from the runner. For upstream's Windows assets, use windows with digger-arch set to amd64.exe, arm64.exe, 386.exe or arm.exe."
     required: false
     default: "Linux"
   digger-arch:
-    description: "Architecture of the digger CLI to install. Valid configurable values are: amd64, arm64, 386."
+    description: "Architecture part of the release asset name, case-sensitive: amd64, arm64, 386 or arm, or X64 (the default, with Linux). Not detected from the runner."
     required: false
     default: "X64"
   log-level:
@@ -288,12 +296,13 @@ runs:
       env:
         LOCAL_DEV_MODE: ${{ inputs.local-dev-mode }}
         INPUT_DIGGER_VERSION: ${{ inputs.digger-version }}
+        INPUT_DIGGER_CLI_SHA256: ${{ inputs.digger-cli-sha256 }}
         ACTION_REF: ${{ github.action_ref }}
       run: |
         set -euo pipefail
 
-        if [[ ! ( -z "$INPUT_DIGGER_VERSION" || "$INPUT_DIGGER_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ) ]]; then
-          echo "::error::Invalid digger-version input $INPUT_DIGGER_VERSION. Must be empty string or match vX.Y.Z"
+        if [[ ! ( -z "$INPUT_DIGGER_VERSION" || "$INPUT_DIGGER_VERSION" =~ ^([A-Za-z0-9_-]+/)*v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ) ]]; then
+          echo "::error::Invalid digger-version input. Must be empty or match vX.Y.Z, optionally with a path prefix and a -suffix"
           exit 1
         fi
 
@@ -304,7 +313,12 @@ runs:
         else
           BINARY_MODE="build"    # Build from source at runtime
         fi
-        echo "binary-mode=${BINARY_MODE}" >> ${GITHUB_OUTPUT}
+        # Only a downloaded CLI is checked, so don't let a checksum look like it applies.
+        if [[ -n "$INPUT_DIGGER_CLI_SHA256" && "$BINARY_MODE" != "prebuilt" ]]; then
+          echo "::error::digger-cli-sha256 is set, but the action is using a ${BINARY_MODE} CLI, which it doesn't check. Set digger-version to download a released CLI."
+          exit 1
+        fi
+        echo "binary-mode=${BINARY_MODE}" >> "${GITHUB_OUTPUT}"
       shell: bash
 
     - name: Validate Input Configuration for Google
@@ -628,12 +642,110 @@ runs:
         cd "$GITHUB_WORKSPACE"
         "$DIGGER_BIN"
 
-    - name: download, install, and run digger
+    # Separate from the run, so these settings stay out of the CLI's environment.
+    - name: download digger
+      id: install-prebuilt
       if: ${{ steps.determine-binary-mode.outputs.binary-mode == 'prebuilt' }}
       env:
         DIGGER_VERSION: ${{ inputs.digger-version || github.action_ref }}
         DIGGER_OS: ${{ inputs.digger-os }}
         DIGGER_ARCH: ${{ inputs.digger-arch }}
+        DIGGER_RELEASE_REPOSITORY: ${{ inputs.digger-release-repository }}
+        DIGGER_CLI_SHA256: ${{ inputs.digger-cli-sha256 }}
+        DIGGER_EE: ${{ inputs.ee }}
+        DIGGER_FIPS: ${{ inputs.fips }}
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        echo "🔧 Downloading Digger CLI..."
+        echo "Runner OS: ${RUNNER_OS}, Arch: ${RUNNER_ARCH}, Digger Version: ${DIGGER_VERSION}"
+
+        # The version can come from github.action_ref (such as vLatest), so
+        # check only that it's a safe path here.
+        if [[ ! "$DIGGER_VERSION" =~ ^[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*$ || "/$DIGGER_VERSION/" =~ /\.\.?/ ]]; then
+          echo "::error::Invalid Digger CLI version"
+          exit 1
+        fi
+        if [[ ! "$DIGGER_RELEASE_REPOSITORY" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ || "/$DIGGER_RELEASE_REPOSITORY/" =~ /\.\.?/ ]]; then
+          echo "::error::Invalid digger-release-repository input. Must be owner/name"
+          exit 1
+        fi
+        # A dot is allowed for upstream's Windows assets, such as digger-arch: amd64.exe.
+        if [[ ! "$DIGGER_OS" =~ ^[A-Za-z0-9_.]+$ ]]; then
+          echo "::error::Invalid digger-os input"
+          exit 1
+        fi
+        if [[ ! "$DIGGER_ARCH" =~ ^[A-Za-z0-9_.]+$ ]]; then
+          echo "::error::Invalid digger-arch input"
+          exit 1
+        fi
+        DIGGER_CLI_SHA256=$(tr '[:upper:]' '[:lower:]' <<<"$DIGGER_CLI_SHA256")
+        if [[ -n "$DIGGER_CLI_SHA256" && ! "$DIGGER_CLI_SHA256" =~ ^[0-9a-f]{64}$ ]]; then
+          echo "::error::Invalid digger-cli-sha256 input. Must be 64 hex characters"
+          exit 1
+        fi
+        if [[ -z "$DIGGER_CLI_SHA256" && "$DIGGER_RELEASE_REPOSITORY" != "diggerhq/digger" ]]; then
+          echo "::error::digger-cli-sha256 is required when digger-release-repository isn't diggerhq/digger"
+          exit 1
+        fi
+
+        if [[ "$DIGGER_EE" == "true" ]]; then
+          ASSET="digger-ee-cli-${DIGGER_OS}-${DIGGER_ARCH}"
+          if [[ "$DIGGER_FIPS" == "true" ]]; then
+            ASSET="${ASSET}-fips"
+          fi
+        else
+          ASSET="digger-cli-${DIGGER_OS}-${DIGGER_ARCH}"
+        fi
+        DOWNLOAD_URL="https://github.com/${DIGGER_RELEASE_REPOSITORY}/releases/download/${DIGGER_VERSION}/${ASSET}"
+
+        echo "Downloading from: $DOWNLOAD_URL"
+
+        # Outside the workspace, so a checked-out file can't stand in for it.
+        BIN_DIR=$(mktemp -d "${RUNNER_TEMP:-/tmp}/digger-cli.XXXXXX")
+        DIGGER_BIN="$BIN_DIR/digger"
+        if ! curl -sL --fail --proto '=https' "$DOWNLOAD_URL" -o "$DIGGER_BIN"; then
+          echo "Failed to download Digger CLI from $DOWNLOAD_URL"
+          echo ""
+          echo "Possible reasons:"
+          echo "1. The release ${DIGGER_VERSION} might not exist in ${DIGGER_RELEASE_REPOSITORY}"
+          echo "2. Binary ${ASSET} might not be available"
+          echo "3. Network connectivity issues"
+          echo ""
+          echo "Suggestions:"
+          echo "- Check if release ${DIGGER_VERSION} exists at: https://github.com/${DIGGER_RELEASE_REPOSITORY}/releases"
+          echo "- Verify the digger-os and digger-arch combination is supported"
+          echo "- Try using a different release version"
+          exit 1
+        fi
+
+        if [[ ! -s "$DIGGER_BIN" ]]; then
+          echo "Downloaded file is empty or doesn't exist"
+          exit 1
+        fi
+
+        if [[ -n "$DIGGER_CLI_SHA256" ]]; then
+          if command -v sha256sum >/dev/null; then
+            ACTUAL=$(sha256sum < "$DIGGER_BIN" | cut -d' ' -f1)
+          else
+            ACTUAL=$(shasum -a 256 < "$DIGGER_BIN" | cut -d' ' -f1)
+          fi
+          if [[ "$ACTUAL" != "$DIGGER_CLI_SHA256" ]]; then
+            echo "::error::Digger CLI checksum mismatch for ${ASSET}: expected ${DIGGER_CLI_SHA256}, got ${ACTUAL}"
+            exit 1
+          fi
+          echo "Digger CLI checksum verified: ${ACTUAL}"
+        fi
+
+        chmod +x "$DIGGER_BIN"
+        echo "bin=$DIGGER_BIN" >> "$GITHUB_OUTPUT"
+        echo "Successfully downloaded and prepared Digger CLI"
+
+    - name: run digger
+      if: ${{ steps.determine-binary-mode.outputs.binary-mode == 'prebuilt' }}
+      env:
+        PREBUILT_CLI: ${{ steps.install-prebuilt.outputs.bin }}
         PLAN_UPLOAD_DESTINATION: ${{ inputs.upload-plan-destination }}
         PLAN_UPLOAD_S3_ENCRYPTION_ENABLED: ${{ inputs.upload-plan-destination-s3-encryption-enabled }}
         PLAN_UPLOAD_S3_ENCRYPTION_TYPE: ${{ inputs.upload-plan-destination-s3-encryption-type }}
@@ -669,53 +781,8 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-
-        echo "🔧 Downloading Digger CLI..."
-        echo "Runner OS: ${{ runner.os }}, Arch: ${{ runner.arch }}, Digger Version: ${DIGGER_VERSION}"
-
-        if [[ ${{ inputs.ee }} == "true" ]]; then
-          if [[ ${{ inputs.fips }} == "true" ]]; then
-            DOWNLOAD_URL="https://github.com/diggerhq/digger/releases/download/${DIGGER_VERSION}/digger-ee-cli-${DIGGER_OS}-${DIGGER_ARCH}-fips"
-          else
-            DOWNLOAD_URL="https://github.com/diggerhq/digger/releases/download/${DIGGER_VERSION}/digger-ee-cli-${DIGGER_OS}-${DIGGER_ARCH}"
-          fi
-        else
-          DOWNLOAD_URL="https://github.com/diggerhq/digger/releases/download/${DIGGER_VERSION}/digger-cli-${DIGGER_OS}-${DIGGER_ARCH}"
-        fi
-
-        echo "Downloading from: $DOWNLOAD_URL"
-
-        if ! curl -sL --fail "$DOWNLOAD_URL" -o digger; then
-          echo "Failed to download Digger CLI from $DOWNLOAD_URL"
-          echo ""
-          echo "Possible reasons:"
-          echo "1. The release ${DIGGER_VERSION} might not exist"
-          echo "2. Binary for ${{ runner.os }}-${{ runner.arch }} might not be available"
-          echo "3. Network connectivity issues"
-          echo ""
-          echo "Suggestions:"
-          echo "- Check if release ${DIGGER_VERSION} exists at: https://github.com/diggerhq/digger/releases"
-          echo "- Verify the architecture combination is supported"
-          echo "- Try using a different release version"
-          exit 1
-        fi
-
-        if [[ ! -f digger || ! -s digger ]]; then
-          echo "Downloaded file is empty or doesn't exist"
-          exit 1
-        fi
-
-        chmod +x digger
-
-        if [[ ! -x digger ]]; then
-          echo "Failed to make digger executable"
-          exit 1
-        fi
-
-        echo "Successfully downloaded and prepared Digger CLI"
-        PATH=$PATH:$(pwd)
-        cd $GITHUB_WORKSPACE
-        digger
+        cd "$GITHUB_WORKSPACE"
+        "$PREBUILT_CLI"
 
     - name: run digger in local dev mode
       if: ${{ steps.determine-binary-mode.outputs.binary-mode == 'local' }}

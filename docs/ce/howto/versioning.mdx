@@ -24,6 +24,48 @@ The `digger-version` input enables pinning to the hash while ALSO using a pre-bu
     digger-version: vX.Y.Z
 ```
 
+### Check the binary's checksum
+
+Pinning the action's commit doesn't pin the CLI it downloads. If you also set `digger-cli-sha256` to the binary's SHA-256, the action refuses to run any binary that doesn't match:
+
+```yaml
+- name: digger
+  uses: diggerhq/digger@<COMMIT_HASH_OF_TAGGED_RELEASE> # vX.Y.Z
+  with:
+    digger-version: vX.Y.Z
+    digger-cli-sha256: <SHA-256 of the binary>
+```
+
+The action only checks a CLI it downloads. If neither `digger-version` nor a `vX.Y.Z` action ref tells it to download one, it builds the CLI from source, and setting `digger-cli-sha256` fails the step rather than being ignored.
+
+Releases from v0.6.88 on publish a `.sha256` file next to each CLI binary. Copy the hash from it once, when you choose the release, and paste it into your workflow. For older releases, download the binary and run `sha256sum` on it yourself. Don't fetch the hash at run time: a checksum from the same release only catches a corrupted download, not a replaced one.
+
+The checksum has to be for the exact asset the action downloads, so change it whenever you change `digger-version`, `ee`, `digger-os` or `digger-arch`. A mismatch fails the step. The asset name is `digger-cli-<digger-os>-<digger-arch>`, or `digger-ee-cli-…` with `ee: "true"`. For example, `ee: "true"` with `digger-os: linux` and `digger-arch: arm64` downloads `digger-ee-cli-linux-arm64`. With the defaults it's `digger-cli-Linux-X64`.
+
+<Note>
+  With `fips: "true"`, the action asks for `digger-ee-cli-<digger-os>-<digger-arch>-fips`. Upstream published only `digger-ee-cli-Linux-X64-fips`, and only through v0.6.135, so newer FIPS setups build the CLI from source.
+</Note>
+
+### Download from another repository's releases
+
+If you build the CLI in your own fork, set `digger-release-repository` to that fork. `digger-version` is the fork's release tag, which can have a path prefix and a suffix, such as `cli/v1.2.3-myorg.1`.
+
+The fork's release needs a public asset named the way the action builds it, such as `digger-ee-cli-linux-arm64`. The action downloads without a token, so a private repository's releases won't work. Set `digger-os` and `digger-arch` to match what the fork publishes, because the defaults `Linux` and `X64` usually won't exist there. `digger-cli-sha256` is required for any repository other than `diggerhq/digger`.
+
+```yaml
+- name: digger
+  uses: my-org/digger@<COMMIT_THE_RELEASE_WAS_BUILT_FROM>
+  with:
+    ee: "true"
+    digger-version: cli/v1.2.3-myorg.1
+    digger-release-repository: my-org/digger
+    digger-os: linux
+    digger-arch: arm64
+    digger-cli-sha256: <SHA-256 of digger-ee-cli-linux-arm64>
+```
+
+Pin the action to the commit the CLI was built from, so both come from the same source. For an annotated tag, that's `git rev-parse 'cli/v1.2.3-myorg.1^{commit}'`, not the tag object's own hash. If the fork publishes build provenance attestations, check the binary with `gh attestation verify` before you copy its hash.
+
 ## vLatest (Convenient auto-upgrades)
 
 For non-production use cases, you can specify the `vLatest` tag to use the latest tagged release for the digger action and the Digger CLI.
