@@ -5,7 +5,7 @@ title: "Caching providers"
 In order to speed up your terraform runs it is great to cache providers so that each workflow run does not have to download the provider again. Digger provides
 an easy way to cache providers with a single argument as follows:
 
-```
+```yaml
       - uses: diggerhq/digger@vLatest
         with:
             cache-dependencies: true
@@ -13,20 +13,18 @@ an easy way to cache providers with a single argument as follows:
 
 This will do the following:
 
-- When each job starts: it will attempt to restore cache from the github cache
-- After terraform runs it will download all the necessary providers into a cache directory
-- Once it is done it will store the cache back into github cache -- using the hash of the directory appended to the key
+- When each job starts, it restores the newest provider cache for the runner's OS and architecture that the branch can see. GitHub looks at the branch's own caches first, then the default branch's, so a cache saved on one pull request isn't visible to other pull requests.
+- Terraform or Terragrunt downloads any providers that are missing into the cache directory.
+- When the job succeeds, Digger lists the files in the cache directory and hashes that list into the cache key. A failed or cancelled job saves nothing, because it can leave half-written providers behind. A job started by an issue comment doesn't save either: it checks out the pull request's code but saves in the default branch's cache scope, where every branch would restore it. If the key matches the cache it restored, nothing is saved. Otherwise it saves the directory under the new key, unless an entry with that key already exists.
 
-The hashing of directories ensures that the cache is only saved if the contents of the directory has changed. Note that github
-cache is immutable so new caches will be new entries in the cache. Digger currently does not prune older caches so you may need
-to clean up older caches using a certain cycle.
+Provider paths include each provider's version and platform, so the key only changes when a run adds a provider or a new version of one. GitHub cache entries can't be overwritten, so each change adds an entry. Digger doesn't prune older entries; GitHub evicts entries that haven't been used for 7 days, and the least recently used entries once the repository passes its cache size limit (10 GB by default). You can also delete them yourself.
 
 ## S3 caching
 
-You can cache in AWS s3 rather than artifacts. This requires a bucket for caching and setting similar settings:
+You can cache in AWS S3 rather than the GitHub Actions cache. This requires a bucket for caching and setting similar settings:
 
-```
-    - uses: diggerhq/digger@vLatest
+```yaml
+      - uses: diggerhq/digger@vLatest
         with:
             cache-dependencies-s3: true
             cache-dependencies-s3-bucket: terraform-cache-1756322349465
@@ -39,7 +37,7 @@ You can cache in AWS s3 rather than artifacts. This requires a bucket for cachin
 If you are using self-hosted runners with github it might be overkill on your bandwidth to load and restore from cache. In this case it might be better to mount
 a common volume for all the runners to read and write to. Digger provides an argument to control the location for the terraform (or terragrunt) provider cache directory:
 
-```
+```yaml
       - uses: diggerhq/digger@vLatest
         with:
             terraform-cache-dir: /home/myuser/mnt/terraform-cache
@@ -48,7 +46,29 @@ a common volume for all the runners to read and write to. Digger provides an arg
 Where this path points to the location of a mounted volume that all the runners can read and write to. With this configuration in place, all runners will update the provider cache in place
 which means there is no need to re-download providers or upload them back to github cache each time.
 
+## Terragrunt's provider cache
+
+Terragrunt has its own [provider cache](https://docs.terragrunt.com/features/caching/provider-cache-server/), which lets many units share one download of each provider. By default, Digger turns it on whenever `cache-dependencies` or `cache-dependencies-s3` is `true`.
+
+To control it separately, set `terragrunt-provider-cache` to `true` or `false`. This is useful with a shared volume, where you want Terragrunt's cache but not a GitHub or S3 copy of the same directory:
+
+```yaml
+      - uses: diggerhq/digger@vLatest
+        with:
+            terraform-cache-dir: /home/myuser/mnt/terraform-cache
+            cache-dependencies: false
+            terragrunt-provider-cache: true
+```
+
+Terragrunt's locks only coordinate processes on the same machine. If runners on several hosts write to the same volume at once, they can still collide; see the note below.
+
+<Warning>
+    A shared volume has no branch isolation. Any job that writes to it, including a plan of an untrusted pull request, can change provider binaries that later applies run. Commit `.terraform.lock.hcl` files with hashes for every platform you use, so Terraform and OpenTofu check each cached provider before running it.
+</Warning>
+
+Releases from before this input was added ignore it with a warning, so check that the `action.yml` of the release you pin lists `terragrunt-provider-cache`.
+
 <Note>
-    We are currently looking into cases where there might be conflicts between [different runners](https://terragrunt.gruntwork.io/docs/features/provider-cache-server/#why-opentofuterraforms-built-in-provider-caching-doesnt-work)
+    We are currently looking into cases where there might be conflicts between [different runners](https://docs.terragrunt.com/features/caching/provider-cache-server/#why-opentofuterraforms-built-in-provider-caching-doesnt-work)
     writing to the same cache directory. It seems that recent versions of opentofu and terraform have improved their cache handling to avoid this issue. But it is an area we hope to document better for digger in the near future.
 </Note>

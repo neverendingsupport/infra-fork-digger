@@ -159,6 +159,30 @@ inputs:
     description: "Leverage actions/cache to cache dependencies to speed up execution"
     required: false
     default: 'false'
+  terraform-cache-dir:
+    description: "allows overriding of the terraform cache dir which defaults to ${github.workspace}/cache"
+    required: false
+    default: ''
+  cache-dependencies-s3:
+    description: "Use S3 for caching terraform/terragrunt dependencies"
+    required: false
+    default: 'false'
+  cache-dependencies-s3-bucket:
+    description: "S3 bucket name for caching without the leading s3 (e.g. mybucket)"
+    required: false
+    default: ''
+  cache-dependencies-s3-bucket-prefix:
+    description: "S3 bucket prefix for caching (e.g. cache)"
+    required: false
+    default: ''
+  cache-dependencies-s3-region:
+    description: "AWS region for S3 cache bucket"
+    required: false
+    default: 'us-east-1'
+  terragrunt-provider-cache:
+    description: "Turn Terragrunt's provider cache on (true) or off (false). Empty turns it on when cache-dependencies or cache-dependencies-s3 is true. Only Terragrunt uses it; any other value fails the step."
+    required: false
+    default: ''
 outputs:
   output:
     value: ${{ steps.digger.outputs.output }}

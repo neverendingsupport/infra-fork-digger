@@ -28,6 +28,9 @@ jobs:
       - name: Test source-build action CLI selection
         run: python3 scripts/test_action_source_build.py
 
+      - name: Test action provider cache settings
+        run: python3 scripts/test_action_cache.py
+
       - name: Deps
         run: |
           go get -v ./...

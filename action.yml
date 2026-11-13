@@ -245,6 +245,10 @@ inputs:
     description: "AWS region for S3 cache bucket"
     required: false
     default: "us-east-1"
+  terragrunt-provider-cache:
+    description: "Turn Terragrunt's provider cache on (true) or off (false). Empty turns it on when cache-dependencies or cache-dependencies-s3 is true. Only Terragrunt uses it; any other value fails the step."
+    required: false
+    default: ""
 
   digger-spec:
     description: "(orchestrator only) the spec to pass onto digger cli"
@@ -373,25 +377,52 @@ runs:
         AZURE_LOGIN_POST_CLEANUP: ${{ inputs.setup-azure == 'true' && 'true' || 'false' }}
       if: ${{ inputs.setup-azure == 'true' && inputs.azure-client-id != '' }}
 
-    # if terraform-cache-dir is set then we set it to that otherwise set it to '${{github.workspace}}/cache'
-    - name: retrieve cache dir
+    # terraform-cache-dir defaults to ${{ github.workspace }}/cache.
+    - name: cache settings
+      id: cache-settings
       shell: bash
+      env:
+        CACHE_DIR: ${{ inputs.terraform-cache-dir || format('{0}/cache', github.workspace) }}
+        TG_PROVIDER_CACHE_INPUT: ${{ inputs.terragrunt-provider-cache }}
+        CACHE_DEPENDENCIES: ${{ inputs.cache-dependencies }}
+        CACHE_DEPENDENCIES_S3: ${{ inputs.cache-dependencies-s3 }}
       run: |
-        CACHE_DIR=${{ inputs.terraform-cache-dir == '' &&
-          format('{0}/cache', github.workspace) ||
-          inputs.terraform-cache-dir }}
-        echo "TF_PLUGIN_CACHE_DIR=$CACHE_DIR" >> $GITHUB_ENV
-        echo "TG_PROVIDER_CACHE_DIR=$CACHE_DIR" >> $GITHUB_ENV
-        echo "TERRAGRUNT_PROVIDER_CACHE_DIR=$CACHE_DIR" >> $GITHUB_ENV
+        set -euo pipefail
+        # Expressions compare case-insensitively; match them.
+        shopt -s nocasematch
+        case "$TG_PROVIDER_CACHE_INPUT" in
+          true) TG_PROVIDER_CACHE=1 ;;
+          false) TG_PROVIDER_CACHE=0 ;;
+          "") [[ $CACHE_DEPENDENCIES == true || $CACHE_DEPENDENCIES_S3 == true ]] && TG_PROVIDER_CACHE=1 || TG_PROVIDER_CACHE=0 ;;
+          *) echo "::error::Invalid terragrunt-provider-cache input. Must be true, false or empty"; exit 1 ;;
+        esac
+        if [[ "$CACHE_DIR" == *$'\n'* || "$CACHE_DIR" == *$'\r'* ]]; then
+          echo "::error::terraform-cache-dir can't contain a line break"; exit 1
+        fi
+        # The shell expanded a leading ~ when this input was pasted into the script.
+        # shellcheck disable=SC2088 # matching a literal ~
+        [[ "$CACHE_DIR" == "~" || "$CACHE_DIR" == "~/"* ]] && CACHE_DIR="${HOME}${CACHE_DIR:1}"
+
+        {
+          echo "TF_PLUGIN_CACHE_DIR=$CACHE_DIR"
+          echo "TG_PROVIDER_CACHE_DIR=$CACHE_DIR"
+          echo "TERRAGRUNT_PROVIDER_CACHE_DIR=$CACHE_DIR"
+        } >> "$GITHUB_ENV"
+        {
+          echo "cache-dir=$CACHE_DIR"
+          echo "tg-provider-cache=$TG_PROVIDER_CACHE"
+          # The cache-key step adds a hash of the provider set after the run.
+          echo "cache-key-prefix=digger-cache-${RUNNER_OS}-${RUNNER_ARCH}-"
+        } >> "$GITHUB_OUTPUT"
 
     - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       id: restore_cache
       name: restore_cache
       with:
-        path: ${{ env.TF_PLUGIN_CACHE_DIR }}
-        key: digger-cache
+        path: ${{ steps.cache-settings.outputs.cache-dir }}
+        key: ${{ steps.cache-settings.outputs.cache-key-prefix }}
         restore-keys: |
-          digger-cache
+          ${{ steps.cache-settings.outputs.cache-key-prefix }}
       if: ${{ inputs.cache-dependencies == 'true' }}
 
     - name: restore-s3-cache
@@ -573,8 +604,8 @@ runs:
 
         NO_BACKEND: ${{ inputs.no-backend }}
         DEBUG: "true"
-        TG_PROVIDER_CACHE: ${{ (inputs.cache-dependencies == 'true' || inputs.cache-dependencies-s3 == 'true') && 1 || 0 }}
-        TERRAGRUNT_PROVIDER_CACHE: ${{ (inputs.cache-dependencies == 'true' || inputs.cache-dependencies-s3 == 'true') && 1 || 0 }}
+        TG_PROVIDER_CACHE: ${{ steps.cache-settings.outputs.tg-provider-cache }}
+        TERRAGRUNT_PROVIDER_CACHE: ${{ steps.cache-settings.outputs.tg-provider-cache }}
         TF_PLUGIN_CACHE_DIR: ${{ env.TF_PLUGIN_CACHE_DIR }}
         TG_PROVIDER_CACHE_DIR: ${{ env.TF_PLUGIN_CACHE_DIR }}
         TERRAGRUNT_PROVIDER_CACHE_DIR: ${{ env.TF_PLUGIN_CACHE_DIR }}
@@ -627,8 +658,8 @@ runs:
         INPUT_DRIFT_DETECTION_SLACK_NOTIFICATION_URL: ${{ inputs.drift-detection-slack-notification-url }}
         INPUT_DRIFT_DETECTION_ADVANCED_SLACK_NOTIFICATION_URL: ${{ inputs.drift-detection-advanced-slack-notification-url }}
         NO_BACKEND: ${{ inputs.no-backend }}
-        TG_PROVIDER_CACHE: ${{ (inputs.cache-dependencies == 'true' || inputs.cache-dependencies-s3 == 'true') && 1 || 0 }}
-        TERRAGRUNT_PROVIDER_CACHE: ${{ (inputs.cache-dependencies == 'true' || inputs.cache-dependencies-s3 == 'true') && 1 || 0 }}
+        TG_PROVIDER_CACHE: ${{ steps.cache-settings.outputs.tg-provider-cache }}
+        TERRAGRUNT_PROVIDER_CACHE: ${{ steps.cache-settings.outputs.tg-provider-cache }}
         TF_PLUGIN_CACHE_DIR: ${{ env.TF_PLUGIN_CACHE_DIR }}
         TG_PROVIDER_CACHE_DIR: ${{ env.TF_PLUGIN_CACHE_DIR }}
         TERRAGRUNT_PROVIDER_CACHE_DIR: ${{ env.TF_PLUGIN_CACHE_DIR }}
@@ -714,8 +745,8 @@ runs:
         INPUT_DRIFT_DETECTION_SLACK_NOTIFICATION_URL: ${{ inputs.drift-detection-slack-notification-url }}
         INPUT_DRIFT_DETECTION_ADVANCED_SLACK_NOTIFICATION_URL: ${{ inputs.drift-detection-advanced-slack-notification-url }}
         NO_BACKEND: ${{ inputs.no-backend }}
-        TG_PROVIDER_CACHE: ${{ (inputs.cache-dependencies == 'true' || inputs.cache-dependencies-s3 == 'true') && 1 || 0 }}
-        TERRAGRUNT_PROVIDER_CACHE: ${{ (inputs.cache-dependencies == 'true' || inputs.cache-dependencies-s3 == 'true') && 1 || 0 }}
+        TG_PROVIDER_CACHE: ${{ steps.cache-settings.outputs.tg-provider-cache }}
+        TERRAGRUNT_PROVIDER_CACHE: ${{ steps.cache-settings.outputs.tg-provider-cache }}
         TF_PLUGIN_CACHE_DIR: ${{ env.TF_PLUGIN_CACHE_DIR }}
         TG_PROVIDER_CACHE_DIR: ${{ env.TF_PLUGIN_CACHE_DIR }}
         TERRAGRUNT_PROVIDER_CACHE_DIR: ${{ env.TF_PLUGIN_CACHE_DIR }}
@@ -750,12 +781,40 @@ runs:
         $BIN
         echo "✅ digger completed"
 
+    # hashFiles() only reads the workspace, and the cache dir can be outside it.
+    # Writes no key, so nothing is saved, when there's nothing new to save.
+    # A failed or cancelled run can leave half-written providers, so it doesn't save.
+    - name: cache-key
+      id: cache-key
+      shell: bash
+      env:
+        CACHE_DIR: ${{ steps.cache-settings.outputs.cache-dir }}
+        KEY_PREFIX: ${{ steps.cache-settings.outputs.cache-key-prefix }}
+        RESTORED_KEY: ${{ steps.restore_cache.outputs.cache-matched-key }}
+      run: |
+        set -euo pipefail
+        [[ -n "$KEY_PREFIX" ]] || exit 0
+        # A comment run checks out the PR's code but saves in the default
+        # branch's cache scope, where every branch would restore it.
+        if [[ "$GITHUB_EVENT_NAME" == "issue_comment" ]]; then
+          echo "Not saving the provider cache from an issue_comment run"; exit 0
+        fi
+        # Provider paths include the version and platform, so the list of
+        # paths changes whenever the provider set does.
+        FILES=$(cd "$CACHE_DIR" 2>/dev/null && find . -type f | LC_ALL=C sort) || true
+        [[ -n "$FILES" ]] || { echo "No providers cached; nothing to save"; exit 0; }
+        sha256() { if command -v sha256sum >/dev/null; then sha256sum; else shasum -a 256; fi; }
+        KEY="${KEY_PREFIX}$(printf '%s\n' "$FILES" | sha256 | cut -c1-16)"
+        [[ "$KEY" != "$RESTORED_KEY" ]] || { echo "Provider set unchanged since $KEY; not saving"; exit 0; }
+        echo "key=$KEY" >> "$GITHUB_OUTPUT"
+      if: ${{ success() && inputs.cache-dependencies == 'true' }}
+
     - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
       name: cache-save
-      if: ${{ always() && inputs.cache-dependencies == 'true' && steps.restore_cache.outputs.cache-hit != 'true' }}
+      if: ${{ success() && steps.cache-key.outputs.key != '' }}
       with:
-        path: ${{ env.TF_PLUGIN_CACHE_DIR }}
-        key: digger-cache-${{ hashFiles('**/cache') }}
+        path: ${{ steps.cache-settings.outputs.cache-dir }}
+        key: ${{ steps.cache-key.outputs.key }}
 
     - name: save-s3-cache
       shell: bash
