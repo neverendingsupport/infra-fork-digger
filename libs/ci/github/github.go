@@ -702,34 +702,42 @@ func isMergeableState(mergeableState string) bool {
 }
 
 func (svc GithubService) IsMergeable(prNumber int) (bool, error) {
+	mergeable, _, err := svc.MergeabilitySnapshot(prNumber)
+	return mergeable, err
+}
+
+// MergeabilitySnapshot returns the PR used to evaluate mergeability, including
+// the head used for the blocked-check exception.
+func (svc GithubService) MergeabilitySnapshot(prNumber int) (bool, *github.PullRequest, error) {
 	isPullRequest, err := svc.IsPullRequest(prNumber)
 	if err != nil {
 		slog.Error("could not get pull request type", "error", err, "prNumber", prNumber)
-		return false, fmt.Errorf("could not get pull request type: %v", err)
+		return false, nil, fmt.Errorf("could not get pull request type: %v", err)
 	}
 
 	// if this is an issue it will always be merable (closable
 	if !isPullRequest {
-		return true, nil
+		return true, nil, nil
 	}
 
 	pr, _, err := svc.Client.PullRequests.Get(context.Background(), svc.Owner, svc.RepoName, prNumber)
 	if err != nil {
 		slog.Error("error getting pull request", "error", err, "prNumber", prNumber)
-		return false, fmt.Errorf("error getting pull request: %v", err)
+		return false, nil, fmt.Errorf("error getting pull request: %v", err)
 	}
 
 	if pr.GetMergeable() && isMergeableState(pr.GetMergeableState()) {
-		return true, nil
+		return true, pr, nil
 	}
 
 	// When the PR is blocked solely because digger/apply is a required check that hasn't
 	// passed yet, allow the apply to proceed — it's the only way to satisfy that check.
 	if strings.ToLower(pr.GetMergeableState()) == "blocked" {
-		return svc.isBlockedOnlyByDiggerApply(pr.GetHead().GetSHA())
+		allowed, err := svc.isBlockedOnlyByDiggerApply(pr.GetHead().GetSHA())
+		return allowed, pr, err
 	}
 
-	return false, nil
+	return false, pr, nil
 }
 
 // isBlockedOnlyByDiggerApply returns true if the only non-successful check runs on the

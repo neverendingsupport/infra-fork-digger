@@ -35,11 +35,12 @@ type commandOriginTransport func(*http.Request) (*http.Response, error)
 func (f commandOriginTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 type commandOriginCI struct {
-	orgID    uint
-	event    *github.IssueCommentEvent
-	runs     []spec.Spec
-	projects int
-	attempts int
+	orgID         uint
+	event         *github.IssueCommentEvent
+	runs          []spec.Spec
+	projects      int
+	attempts      int
+	dispatchError error
 }
 
 func (c *commandOriginCI) GetCiBackend(ci_backends.CiBackendOptions) (ci_backends.CiBackend, error) {
@@ -60,7 +61,7 @@ func (c *commandOriginCI) TriggerWorkflow(job spec.Spec, _ string, _ string) err
 		return fmt.Errorf("workflow dispatched without complete original-command manifest")
 	}
 	c.runs = append(c.runs, job)
-	return nil
+	return c.dispatchError
 }
 
 func commandPipelineDB(t *testing.T, event *github.IssueCommentEvent) (*models.Database, models.Organisation, models.Repo) {

@@ -445,6 +445,39 @@ func handleIssueCommentEvent(gh utils.GithubClientProvider, payload *github.Issu
 		return nil
 	}
 
+	qualifiedApplyComment := *diggerCommand == scheduler.DiggerCommandApply && qualifyApplyComment(payload)
+	if qualifiedApplyComment {
+		mergeable, snapshot, mergeErr := ghService.MergeabilitySnapshot(issueNumber)
+		if mergeErr != nil {
+			err = fmt.Errorf("error checking if PR is mergeable")
+		} else {
+			err = apply_requirements.CheckWithMergeability(ghService, impactedProjectsForComment, jobs, issueNumber, *prSourceBranch, targetBranch, mergeable)
+		}
+		if err != nil {
+			if saveErr := recordApplyRejection(payload, orgId, appId, *commitSha, snapshot, err); saveErr != nil {
+				slog.Error("digger.apply.rejection_unavailable", "commentId", userCommentId, "error", saveErr)
+			}
+			commentReporterManager.UpdateComment(fmt.Sprintf(":x: Could not proceed with apply since apply requirements checks have failed: %v", err))
+			return nil
+		}
+	}
+
+	if *diggerCommand == scheduler.DiggerCommandApply {
+		source, err := githubCommandSource(payload)
+		if err != nil {
+			return err
+		}
+		admitted, err := models.DB.AdmitApply(*source)
+		if err != nil {
+			slog.Error("digger.apply.admission_failed", "commentId", userCommentId, "error", err)
+			return err
+		}
+		if !admitted {
+			slog.Info("digger.apply.redelivery_fenced", "commentId", userCommentId, "issueNumber", issueNumber)
+			return nil
+		}
+	}
+
 	// perform unlocking in backend
 	if err := locking2.PerformPRLockingAction(config, orgId, ghService, repoFullName, issueNumber, impactedProjectsForComment, *diggerCommand); err != nil {
 		slog.Error("Failed to perform lock action",
@@ -481,10 +514,9 @@ func handleIssueCommentEvent(gh utils.GithubClientProvider, payload *github.Issu
 		return nil
 	}
 
-	// Check for apply requirements
-	if *diggerCommand == scheduler.DiggerCommandApply {
-		err = apply_requirements.CheckApplyRequirements(ghService, impactedProjectsForComment, jobs, issueNumber, *prSourceBranch, targetBranch)
-		if err != nil {
+	// Sources outside the receipt cutover keep the original lock-before-check behavior.
+	if *diggerCommand == scheduler.DiggerCommandApply && !qualifiedApplyComment {
+		if err := apply_requirements.CheckApplyRequirements(ghService, impactedProjectsForComment, jobs, issueNumber, *prSourceBranch, targetBranch); err != nil {
 			commentReporterManager.UpdateComment(fmt.Sprintf(":x: Could not proceed with apply since apply requirements checks have failed: %v", err))
 			return nil
 		}

@@ -14,6 +14,11 @@ import (
 // Repository ownership has already been checked by GetJobsForRepoApi.
 func getCommandProvenance(c *gin.Context, orgID uint, repo *models.Repo) {
 	query := c.Request.URL.Query()
+	versions, includeRejection := query["command_rejection_version"]
+	if includeRejection && (len(versions) != 1 || versions[0] != "1") {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "command_rejection_version must be 1"})
+		return
+	}
 	if len(query["source_comment_id"]) != 1 || len(query["pr_number"]) != 1 {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "one source_comment_id and pr_number are required"})
 		return
@@ -24,7 +29,7 @@ func getCommandProvenance(c *gin.Context, orgID uint, repo *models.Repo) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "source_comment_id and pr_number must be positive integers"})
 		return
 	}
-	provenance, err := models.DB.GetCommandProvenance(orgID, repo.RepoFullName, int(pr), commentID)
+	provenance, receipt, err := models.DB.GetCommandEvidence(orgID, repo, int(pr), commentID, includeRejection)
 	if errors.Is(err, models.ErrProvenanceTooLarge) {
 		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "command execution history exceeds the evidence limit"})
 		return
@@ -38,5 +43,9 @@ func getCommandProvenance(c *gin.Context, orgID uint, repo *models.Repo) {
 	}
 	slog.Info("Read command provenance", "orgId", orgID, "repoFullName", repo.RepoFullName,
 		"prNumber", pr, "commentId", commentID)
-	c.JSON(http.StatusOK, gin.H{"repo": repo.MapToJsonStruct(), "command_provenance": provenance})
+	response := gin.H{"repo": repo.MapToJsonStruct(), "command_provenance": provenance}
+	if includeRejection {
+		response["command_rejection"] = receipt
+	}
+	c.JSON(http.StatusOK, response)
 }

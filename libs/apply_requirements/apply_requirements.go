@@ -24,6 +24,16 @@ func CheckApplyRequirements(ghService ci.PullRequestService, impactedProjects []
 		slog.Error("Error checking if PR is mergeable", "prNumber", prNumber)
 		return fmt.Errorf("error checking if PR is mergeable")
 	}
+	return CheckWithMergeability(ghService, impactedProjects, jobs, prNumber, sourceBranch, targetBranch, isMergeable)
+}
+
+type NotMergeable struct{ Project string }
+
+func (e NotMergeable) Error() string {
+	return fmt.Sprintf("PR fails apply requirements for project %v, Expected PR to be mergable. Ensure all status checks are successful in order to proceed", e.Project)
+}
+
+func CheckWithMergeability(ghService ci.PullRequestService, impactedProjects []digger_config.Project, jobs []scheduler.Job, prNumber int, sourceBranch string, targetBranch string, isMergeable bool) error {
 	approvals, err := ghService.GetApprovals(prNumber)
 	if err != nil {
 		slog.Error("Error getting approvals", "prNumber", prNumber)
@@ -43,7 +53,7 @@ func CheckApplyRequirements(ghService ci.PullRequestService, impactedProjects []
 			} else if req == digger_config.ApplyRequirementsUndiverged && isDiverged == true {
 				return fmt.Errorf("PR fails apply requirements for project %v, Expected PR to be undiverged from target branch. Merge main into the PR branch or rebase the PR branch on top of main", proj.Name)
 			} else if req == digger_config.ApplyRequirementsMergeable && isMergeable == false && !ignoreMergeability {
-				return fmt.Errorf("PR fails apply requirements for project %v, Expected PR to be mergable. Ensure all status checks are successful in order to proceed", proj.Name)
+				return NotMergeable{Project: proj.Name}
 			} else {
 				slog.Warn("unknown apply requirements found", "project", proj.Name, "requirement", req)
 			}
