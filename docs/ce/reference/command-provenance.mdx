@@ -1,9 +1,9 @@
 ---
 title: "Command provenance"
-description: "Identify command jobs and reconcile work after failed prerequisites."
+description: "Identify command jobs, read pre-dispatch rejections, and reconcile work after failed prerequisites."
 ---
 
-The NES fork records which GitHub comment created a plan or apply batch. Queue controllers can use this record to distinguish a new recovery plan from an older successful plan on the same commit. A matching timestamp isn't enough to establish that relationship.
+The NES fork records which GitHub comment created a plan or apply batch. Queue controllers can use this record to distinguish a new recovery plan from an older successful plan on the same commit. A matching timestamp isn't enough to establish that relationship. The fork also records a receipt when it refuses an apply before creating any batch.
 
 ## Read a command's jobs
 
@@ -17,11 +17,11 @@ DIGGER_ORG_SOURCE: <external-organisation-source>
 DIGGER_USER_ID: <reader-id>
 ```
 
-`42` is Digger's repository database ID, available from `GET /api/repos/`. `source_comment_id` is the ID of the original `digger plan` or `digger apply` comment. It is not a report comment ID. Both query parameters must appear once and contain positive integers.
+`42` is Digger's repository database ID, available from `GET /api/repos/`. `source_comment_id` is the ID of the original `digger plan` or `digger apply` comment. It is not a report comment ID. Both query parameters must appear once and contain positive integers. An optional `include=command_rejection` adds the [rejection receipt](#read-a-pre-dispatch-rejection).
 
 These routes require `DIGGER_ENABLE_API_ENDPOINTS=true`. The bearer token must match `DIGGER_INTERNAL_SECRET`; it is different from a CLI job token. This shared credential can access other internal API operations. Restrict network access and keep it out of client applications. Repository ownership and the command's installation link are checked against the requested organisation.
 
-Requests without `source_comment_id` keep the existing jobs response. An opted-in response contains `repo` and `command_provenance`:
+Requests without `source_comment_id` keep the existing jobs response. An opted-in response contains `repo` and `command_provenance`, plus `command_rejection` when you [ask for it](#read-a-pre-dispatch-rejection):
 
 ```json
 {
@@ -98,6 +98,85 @@ A queue controller must commit its recovery decision before creating a new plan 
 Before permitting an apply, the consumer must verify the source body, repository, PR and current head; require a complete successful plan; and check every reported workflow attempt against live GitHub state. It must also recheck its latest recovery decision at the apply boundary. These records describe execution history. They don't grant approval, prove that no other command is running, or make a lost GitHub response safe to retry.
 
 Duplicate deliveries can create several batches for one source comment. The API returns all captured batches and does not promise command deduplication. Consumers must account for every batch before treating a recovery plan as settled.
+
+## Read a pre-dispatch rejection
+
+An apply can be refused before the backend creates a batch, so `command_provenance` has nothing for it. An empty `batches` array also covers history the backend never captured, so it can't prove the refusal. Ask for the rejection receipt as well, with the same headers as above:
+
+```http
+GET /api/repos/42/jobs?source_comment_id=123456&pr_number=123&include=command_rejection
+```
+
+`include` is optional, accepts only `command_rejection`, and may appear once. Without it, the response is unchanged. With it, the response adds a `command_rejection` object next to `command_provenance`. The example shows that object only:
+
+```json
+{
+  "version": 1,
+  "receipt": {
+    "version": 1,
+    "kind": "pre_dispatch_rejection",
+    "reason": "apply_requirements",
+    "dispatch_fenced": true,
+    "origin": {
+      "repository_id": 98765,
+      "repo_full_name": "example/infrastructure",
+      "pr_number": 123,
+      "source_comment_id": 123456,
+      "body_sha256": "<64-character SHA-256 digest>",
+      "commit_sha": "<PR head the backend loaded>",
+      "command": "apply"
+    },
+    "github_app_id": 1234,
+    "github_installation_id": 5678,
+    "rejected_at": "2026-11-20T18:52:40.123456Z"
+  }
+}
+```
+
+A backend that predates receipts ignores `include` and leaves `command_rejection` out. Treat a missing key as unavailable evidence, not as `receipt: null`. During a rolling update, consecutive requests can reach different versions.
+
+| Field | Meaning |
+| --- | --- |
+| `version` | Projection version, `1`. It changes only if the projection's own keys change. |
+| `receipt` | The receipt, or `null` when none is visible. |
+| `receipt.version` | Receipt version, `1`. Any change to the receipt's fields, their meaning, or the set of `reason` values bumps it. Reject a version you don't recognize. |
+| `kind` | Always `pre_dispatch_rejection`. |
+| `reason` | Why the backend refused the apply. See the next table. |
+| `dispatch_fenced` | Always `true`: this comment can't create jobs. |
+| `origin` | The same object as `batches[].origin`. `repository_id` is GitHub's repository ID, not Digger's ID from the path. `body_sha256` is the lowercase hex SHA-256 of the comment body in the `created` webhook. `commit_sha` is the PR head the backend loaded the command's configuration from; the requirement check reads GitHub again and can see a newer head. `command` is always `apply`. |
+| `github_app_id` | The App from the backend's stored installation record, not the webhook header. |
+| `github_installation_id` | The installation that delivered the webhook. |
+| `rejected_at` | When the receipt was stored, as an RFC 3339 UTC timestamp, possibly with fractional seconds. |
+
+The backend records a receipt only when it decided not to run the apply:
+
+| `reason` | Refusal |
+| --- | --- |
+| `apply_requirements` | The PR failed a configured apply requirement. |
+| `project_locked` | Another open PR holds a project lock. |
+| `duplicate_command` | An apply for the same commit and project is already running. |
+| `impacted_projects_limit` | The command affects more projects than the configured limits allow. |
+| `draft_pr` | The PR is a draft and the configuration ignores drafts. |
+
+An error isn't a decision, so it records nothing. That covers GitHub API failures during the requirement check, database errors while checking locks, and a timeout waiting for another command on the PR. The comment stays retryable.
+
+A receipt means:
+
+- The backend refused this exact comment before creating a batch for it, and stored that decision before posting its reply. A lost reply doesn't lose the receipt.
+- No batch origin or job can be created for this comment afterward. The database refuses a batch origin for a rejected comment, including one written by a replica that predates receipts, and the backend writes origins before jobs. A delivery already in flight when the receipt landed can be left with check runs and an empty batch row; see [Rejection receipts](#rejection-receipts).
+- No delivery of this comment had recorded a batch origin. If one had, the backend records no receipt and that batch's work stands.
+
+`receipt: null` is not evidence of anything. The command may have run, still be running, or have failed before reaching a decision. It may predate receipts, have been refused by a replica that predates receipts, or have been refused while storing the receipt failed. Those last two leave the comment unfenced, so a redelivery can still run it; the reply to a failed store says so. A receipt is also invisible after the installation that recorded it loses its active link to the organisation, for example in an App migration, but the fence still applies. The API never infers a receipt from reply text, timestamps or an empty `batches` array.
+
+Before acting on a receipt, check that `origin` matches the command you expected, using the same checks as for a batch, and check the App and installation IDs. The first receipt stored wins; a later or concurrent delivery doesn't replace it.
+
+The receipt says nothing about locks or other side effects. When `pr_locks` is enabled, the backend takes the PR's project locks before it checks apply requirements, and an `apply_requirements` refusal doesn't release them; `digger unlock` or the PR's unlock events do. A refusal doesn't change, consume or invalidate any plan batch, and it isn't evidence that a plan is still valid for a retry.
+
+A receipt covers only its comment. An apply started another way, such as a check run's action button, isn't tied to it, and Infrabot shouldn't read a receipt as "this PR won't be applied".
+
+### Retry a rejected apply
+
+Fix the condition, then post a new `digger apply` comment. Each comment is a separate source, so the backend evaluates a new one from scratch. Redelivering the rejected comment's webhook never runs it: the backend replies that it was already rejected before it takes project locks or creates checks. If the backend can't read the rejection record, it skips that delivery and records nothing. The backend ignores edited comments, as it always has.
 
 ## Workflow dispatch
 
@@ -201,6 +280,28 @@ Chart `0.1.12-nes.6` offers `digger.updateStrategy: Recreate`; its default remai
 
 Existing backend and CLI callers keep their original fields and numeric status values. New optional outcome and display fields are additive. Rolling the backend back leaves the new table and columns in place; don't drop them during rollback. Before starting an old scheduler, stop new command admission and verify that every possibly dispatched workflow has stopped and no unresolved dispatch claim remains. The old scheduler ignores those claims, including a claimed job whose last report says `created`; rolling back with such jobs pending could send them again. The retirement migration and its protective trigger must remain installed during rollback. The immediately previous scheduler can read the retained numeric failed status, but it lacks the complete prerequisite gate and new creation marker. Do not overlap it with new backend or task-worker processes. A pre-patch task worker sends workflows directly and can bypass the database claim entirely. Keep those workers stopped during rollback, or retain the patched sender; the protective trigger cannot block their direct remote API calls. Origins and protocol markers are not backfilled. Keep automated recovery disabled until both producer and consumer have been qualified together.
 
+### Rejection receipts
+
+The rejection migration adds the `command_source_dispositions` table and a trigger on `batch_command_origins`. Each apply comment gets one row, written by whichever happens first: a batch origin, or a refusal. The migration also writes a row for every existing apply origin, so a command with a captured origin can't be rejected later. Applies that older backends ran without capturing an origin have no row, so a late redelivery of one can still be refused and receive a receipt even though an earlier batch ran.
+
+The entrypoint applies the migration before the server starts, so the trigger exists before any replica can write a receipt. From then on, it also refuses origins from previous-version replicas, so a receipt holds during a rolling update. Previous-version replicas don't write or check receipts. A refusal they handle has `receipt: null` and leaves the comment unfenced. If one receives a redelivered webhook for a rejected comment, it takes project locks, creates check runs and an empty batch row, then fails when the trigger refuses the batch's origin, replying `:x: ConvertJobsToDiggerJobs error`. No job runs, but those check runs stay pending. A new replica can leave the same leftovers if a refusal lands while its delivery is already past the early check; it replies that the apply was already rejected. Refusals from before the migration don't get receipts.
+
+Rolling back leaves the table and trigger in place. Keep them: dropping them would let rejected comments dispatch again. While the previous version runs, its refusals get no receipt and aren't fenced. Rolling back to a release that doesn't record command origins removes the fence, because the trigger acts only on origins. The table is immutable to application writes, including `TRUNCATE`; a database superuser can still bypass its triggers, so don't run the backend as one.
+
+To confirm the fence is installed:
+
+```sql
+SELECT tgname FROM pg_trigger WHERE tgname = 'fence_rejected_command_origin';
+```
+
+To check one comment, set `github_repository_id` and `source_comment_id` in `psql`:
+
+```sql
+SELECT disposition, reason, created_at FROM command_source_dispositions
+WHERE repository_id = :'github_repository_id' AND source_comment_id = :'source_comment_id';
+```
+
+The backend logs `digger.command_rejection.recorded` for each stored receipt and `Could not record the command rejection` when a store fails. It logs `Skipping a command that was already rejected` for a refused redelivery.
 
 ## Test the database contract
 
@@ -209,3 +310,5 @@ The backend's ordinary tests skip PostgreSQL qualification unless `DIGGER_COMMAN
 The `NES command provenance` GitHub Actions workflow supplies that database on pull requests to `nes-main`. It tests concurrent dispatch claims, migration compatibility, stale current and previous-version writers, complete command manifests, and the source-built action's CLI selection. Service tests also exercise simultaneous parent callbacks against a real HTTP workflow endpoint, a lost response, and completion that arrives before dispatch returns.
 
 Retirement tests also cover PostgreSQL dispatch/callback lock races, concurrent stale attempts and timestamps, stale previous-release writers, restart recovery, claimed children, persisted dependency chains, independent running siblings, source identity drift and the authenticated reconciliation route. Signed JWT tests cover foreign-organisation and read-only callers alongside an authorized admin. Run-queue tests inject a dequeue failure to verify rollback, prove that a later item advances without resending retired work, and reject settlement when a newer attempt wins. Qualification tests cover the default-off producer, non-GitHub exclusion, legacy terminal completion, known-lineage rejection and separate connections honoring persisted markers after disable. Previous scalar snapshots loaded before and after a new callback remain writable only in an unqualified batch; qualified and soft-deleted-sibling controls reject them. A separate protocol-0 fence fixture confirms unconditional retirement protection. The supported historical repair test reproduces a failure saved before descendant retirement. It does not qualify a production legacy row.
+
+Rejection tests drive signed webhooks through the comment handler against the migrated database. They show that a receipt is committed before its reply and survives a failed reply, that a redelivery after the PR becomes mergeable never runs, and that a new comment still does. They cover the draft and project-lock refusals, a GitHub error that records nothing, a receipt that lands while a delivery is in flight, a redelivery while the first delivery's batch exists, and an App that differs from the stored installation. Database tests hold one writer's transaction open to show that a refusal and a batch origin serialize in either order, and that duplicate deliveries on two connections, as two replicas would make them, store one receipt. They also cover origins written the way a previous-version replica writes them, the backfill, plan origins, immutability and organisation scoping.

@@ -4,12 +4,14 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
 
 	"github.com/diggerhq/digger/libs/scheduler"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
@@ -56,13 +58,22 @@ type BatchCommandOriginJob struct {
 	ProjectCheckID string `json:"project_check_id"`
 }
 
-func (db *Database) CreateBatchCommandOrigin(batchID uuid.UUID, source GitHubCommandSource, expectedProjects []string) error {
-	if batchID == uuid.Nil || source.RepositoryID <= 0 || source.CommentID <= 0 {
-		return errors.New("command origin requires positive source IDs and a batch UUID")
+func (s GitHubCommandSource) validate() error {
+	if s.RepositoryID <= 0 || s.CommentID <= 0 {
+		return errors.New("command source requires positive repository and comment IDs")
 	}
-	digest, err := hex.DecodeString(source.BodySHA256)
-	if err != nil || len(digest) != 32 {
-		return errors.New("command origin requires a SHA256 body digest")
+	if digest, err := hex.DecodeString(s.BodySHA256); err != nil || len(digest) != 32 {
+		return errors.New("command source requires a SHA256 body digest")
+	}
+	return nil
+}
+
+func (db *Database) CreateBatchCommandOrigin(batchID uuid.UUID, source GitHubCommandSource, expectedProjects []string) error {
+	if batchID == uuid.Nil {
+		return errors.New("command origin requires a batch UUID")
+	}
+	if err := source.validate(); err != nil {
+		return err
 	}
 	projects, err := commandOriginProjects(expectedProjects)
 	if err != nil {
@@ -97,6 +108,10 @@ func (db *Database) CreateBatchCommandOrigin(batchID uuid.UUID, source GitHubCom
 		}
 		return tx.Create(&origin).Error
 	})
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "DG058" {
+		return fmt.Errorf("%w: %s", ErrCommandSourceRejected, pgErr.Message)
+	}
 	if err == nil {
 		slog.Info("digger.command_origin.created", "batch_id", batchID)
 	}

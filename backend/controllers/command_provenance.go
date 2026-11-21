@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strconv"
 
 	"github.com/diggerhq/digger/backend/models"
@@ -24,6 +25,13 @@ func getCommandProvenance(c *gin.Context, orgID uint, repo *models.Repo) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "source_comment_id and pr_number must be positive integers"})
 		return
 	}
+	// The receipt is a sibling object, so v1 readers that check keys strictly
+	// see an unchanged response unless they ask for it.
+	withRejection := slices.Equal(query["include"], []string{"command_rejection"})
+	if query.Has("include") && !withRejection {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "include must be command_rejection"})
+		return
+	}
 	provenance, err := models.DB.GetCommandProvenance(orgID, repo.RepoFullName, int(pr), commentID)
 	if errors.Is(err, models.ErrProvenanceTooLarge) {
 		c.JSON(http.StatusRequestEntityTooLarge, gin.H{"error": "command execution history exceeds the evidence limit"})
@@ -36,7 +44,18 @@ func getCommandProvenance(c *gin.Context, orgID uint, repo *models.Repo) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "could not read command execution history"})
 		return
 	}
+	response := gin.H{"repo": repo.MapToJsonStruct(), "command_provenance": provenance}
+	if withRejection {
+		rejection, err := models.DB.GetCommandRejection(orgID, repo.RepoFullName, int(pr), commentID)
+		if err != nil {
+			slog.Error("Could not read command rejection", "orgId", orgID,
+				"repoFullName", repo.RepoFullName, "prNumber", pr, "commentId", commentID, "error", err)
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "could not read command rejection"})
+			return
+		}
+		response["command_rejection"] = rejection
+	}
 	slog.Info("Read command provenance", "orgId", orgID, "repoFullName", repo.RepoFullName,
-		"prNumber", pr, "commentId", commentID)
-	c.JSON(http.StatusOK, gin.H{"repo": repo.MapToJsonStruct(), "command_provenance": provenance})
+		"prNumber", pr, "commentId", commentID, "withRejection", withRejection)
+	c.JSON(http.StatusOK, response)
 }

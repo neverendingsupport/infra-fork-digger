@@ -103,3 +103,7 @@ workflows:
       on_commit_to_default: ["digger unlock"]
       skip_merge_check: true
 ```
+
+## Retry after a failed requirement
+
+When an apply fails its requirements, fix the condition and comment `digger apply` again. In the NES fork, the backend records the refusal and never runs that comment later, even if GitHub redelivers its webhook; see [command provenance](/ce/reference/command-provenance#read-a-pre-dispatch-rejection).

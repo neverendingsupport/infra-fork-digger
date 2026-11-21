@@ -26,6 +26,16 @@ const commandOriginMigration = "20261030140000_batch_command_origins.sql"
 // PostgreSQL 16 instance whose role can create databases; no default is assumed.
 func commandOriginPostgresDB(t *testing.T, migrate bool) *Database {
 	t.Helper()
+	if migrate {
+		return commandOriginPostgresDBBefore(t, "")
+	}
+	return commandOriginPostgresDBBefore(t, commandOriginMigration)
+}
+
+// commandOriginPostgresDBBefore applies migrations up to, not including, stop.
+// An empty stop applies them all.
+func commandOriginPostgresDBBefore(t *testing.T, stop string) *Database {
+	t.Helper()
 	dsn := os.Getenv("DIGGER_COMMAND_ORIGIN_POSTGRES_DSN")
 	if dsn == "" {
 		t.Skip("set DIGGER_COMMAND_ORIGIN_POSTGRES_DSN for PostgreSQL qualification")
@@ -49,8 +59,9 @@ func commandOriginPostgresDB(t *testing.T, migrate bool) *Database {
 	require.NoError(t, err)
 	require.NotEmpty(t, files)
 	require.True(t, slices.ContainsFunc(files, func(f string) bool { return filepath.Base(f) == commandOriginMigration }))
+	require.True(t, stop == "" || slices.ContainsFunc(files, func(f string) bool { return filepath.Base(f) == stop }))
 	for _, path := range files {
-		if filepath.Base(path) == commandOriginMigration && !migrate {
+		if filepath.Base(path) == stop {
 			break
 		}
 		commandOriginApplySQL(t, db.GormDB, path)

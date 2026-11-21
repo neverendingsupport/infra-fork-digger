@@ -81,13 +81,8 @@ func (db *Database) GetCommandProvenance(orgID uint, repoFullName string, prNumb
 	response := &CommandProvenance{Version: 1, Complete: true, Batches: make([]CommandProvenanceBatch, 0)}
 	err := db.GormDB.Transaction(func(tx *gorm.DB) error {
 		var origins []BatchCommandOrigin
-		// Scope the immutable installation snapshot, not mutable batch/report IDs.
-		// EXISTS avoids duplicating origins if legacy links contain duplicates.
 		err := tx.Where("repo_full_name = ? AND pr_number = ? AND source_comment_id = ?", repoFullName, prNumber, sourceCommentID).
-			Where(`EXISTS (SELECT 1 FROM github_app_installation_links l
-				JOIN organisations o ON o.id = l.organisation_id
-				WHERE l.github_installation_id = batch_command_origins.github_installation_id
-				AND o.id = ? AND l.status = ? AND l.deleted_at IS NULL AND o.deleted_at IS NULL)`, orgID, GithubAppInstallationLinkActive).
+			Where(installationInOrg("batch_command_origins"), orgID, GithubAppInstallationLinkActive).
 			Order("batch_id ASC").Limit(MaxCommandProvenanceBatches + 1).Find(&origins).Error
 		if err != nil {
 			return err
@@ -196,4 +191,14 @@ func commandProvenanceJobMatches(origin BatchCommandOrigin, entry BatchCommandOr
 	partial.ExpectedProjects = []string{entry.Project}
 	manifest, err := commandOriginManifest(partial, []DiggerJob{job})
 	return err == nil && len(manifest) == 1 && manifest[0] == entry
+}
+
+// installationInOrg scopes rows by their immutable installation snapshot, not
+// mutable batch, report or repository IDs. EXISTS avoids duplicate rows when
+// legacy links repeat. Bind the organisation ID and active link status.
+func installationInOrg(table string) string {
+	return `EXISTS (SELECT 1 FROM github_app_installation_links l
+		JOIN organisations o ON o.id = l.organisation_id
+		WHERE l.github_installation_id = ` + table + `.github_installation_id
+		AND o.id = ? AND l.status = ? AND l.deleted_at IS NULL AND o.deleted_at IS NULL)`
 }

@@ -8,6 +8,12 @@ import (
 	"log/slog"
 )
 
+// UnmetRequirementError means the PR fails a requirement. Any other error from
+// CheckApplyRequirements means GitHub couldn't be checked.
+type UnmetRequirementError struct{ message string }
+
+func (e UnmetRequirementError) Error() string { return e.message }
+
 // IgnoreMergeabilityForProject will strip out the 'mergeability' requirement if
 // the project's workflow has specified skip_merge_check: true
 func IgnoreMergeabilityForProject(project digger_config.Project, jobs []scheduler.Job) bool {
@@ -39,11 +45,11 @@ func CheckApplyRequirements(ghService ci.PullRequestService, impactedProjects []
 		for _, req := range proj.ApplyRequirements {
 			ignoreMergeability := IgnoreMergeabilityForProject(proj, jobs)
 			if req == digger_config.ApplyRequirementsApproved && isApproved == false {
-				return fmt.Errorf("PR fails apply requirements for project %v, Expected PR to be approved, a minimum of one approval is required before proceeding", proj.Name)
+				return UnmetRequirementError{fmt.Sprintf("PR fails apply requirements for project %v, Expected PR to be approved, a minimum of one approval is required before proceeding", proj.Name)}
 			} else if req == digger_config.ApplyRequirementsUndiverged && isDiverged == true {
-				return fmt.Errorf("PR fails apply requirements for project %v, Expected PR to be undiverged from target branch. Merge main into the PR branch or rebase the PR branch on top of main", proj.Name)
+				return UnmetRequirementError{fmt.Sprintf("PR fails apply requirements for project %v, Expected PR to be undiverged from target branch. Merge main into the PR branch or rebase the PR branch on top of main", proj.Name)}
 			} else if req == digger_config.ApplyRequirementsMergeable && isMergeable == false && !ignoreMergeability {
-				return fmt.Errorf("PR fails apply requirements for project %v, Expected PR to be mergable. Ensure all status checks are successful in order to proceed", proj.Name)
+				return UnmetRequirementError{fmt.Sprintf("PR fails apply requirements for project %v, Expected PR to be mergable. Ensure all status checks are successful in order to proceed", proj.Name)}
 			} else {
 				slog.Warn("unknown apply requirements found", "project", proj.Name, "requirement", req)
 			}

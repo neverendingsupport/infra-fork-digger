@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -21,6 +22,7 @@ import (
 	github2 "github.com/diggerhq/digger/libs/ci/github"
 	"github.com/diggerhq/digger/libs/comment_utils/reporting"
 	"github.com/diggerhq/digger/libs/digger_config"
+	"github.com/diggerhq/digger/libs/locking"
 	"github.com/diggerhq/digger/libs/scheduler"
 	"github.com/google/go-github/v61/github"
 	"github.com/samber/lo"
@@ -260,6 +262,18 @@ func handleIssueCommentEvent(gh utils.GithubClientProvider, payload *github.Issu
 		"command", *diggerCommand,
 	)
 
+	// Batches and rejections both key on this exact created comment.
+	source, sourceErr := githubCommandSource(payload)
+	refusal := applyRefusal{command: *diggerCommand, source: source, headerAppID: appId, rejection: models.ApplyRejection{
+		RepoFullName: repoFullName, PrNumber: issueNumber, CommitSHA: *commitSha, GithubInstallationID: installationId,
+	}}
+	if *diggerCommand == scheduler.DiggerCommandApply {
+		if reply, err := refusal.earlier(sourceErr); reply != "" {
+			commentReporterManager.UpdateComment(reply)
+			return err
+		}
+	}
+
 	prBranchName, _, targetBranch, _, err := ghService.GetBranchName(issueNumber)
 	if err != nil {
 		slog.Error("Error getting branch name",
@@ -364,7 +378,8 @@ func handleIssueCommentEvent(gh utils.GithubClientProvider, payload *github.Issu
 				"changedFileCount", len(changedFiles),
 			)
 
-			commentReporterManager.UpdateComment(fmt.Sprintf(":x: Error the number impacted projects %v exceeds number of changed files: %v", len(impactedProjectsForComment), len(changedFiles)))
+			commentReporterManager.UpdateComment(fmt.Sprintf(":x: Error the number impacted projects %v exceeds number of changed files: %v", len(impactedProjectsForComment), len(changedFiles)) +
+				refusal.record(models.RejectionImpactedProjectsLimit))
 
 			slog.Debug("Detailed event information",
 				slog.Group("details",
@@ -387,7 +402,8 @@ func handleIssueCommentEvent(gh utils.GithubClientProvider, payload *github.Issu
 			"changedFileCount", len(changedFiles),
 		)
 
-		commentReporterManager.UpdateComment(fmt.Sprintf(":x: Error the number impacted projects %v exceeds Max allowed ImpactedProjectsPerChange: %v, we set this limit to protect against hitting github API limits. Add the 'digger:force' label to bypass this limit.", len(impactedProjectsForComment), maxImpactedProjectsPerChange))
+		commentReporterManager.UpdateComment(fmt.Sprintf(":x: Error the number impacted projects %v exceeds Max allowed ImpactedProjectsPerChange: %v, we set this limit to protect against hitting github API limits. Add the 'digger:force' label to bypass this limit.", len(impactedProjectsForComment), maxImpactedProjectsPerChange) +
+			refusal.record(models.RejectionImpactedProjectsLimit))
 
 		slog.Debug("Detailed event information",
 			slog.Group("details",
@@ -412,6 +428,7 @@ func handleIssueCommentEvent(gh utils.GithubClientProvider, payload *github.Issu
 			"issueNumber", issueNumber,
 			"isDraft", isDraft,
 		)
+		refusal.record(models.RejectionDraftPR)
 
 		if os.Getenv("DIGGER_REPORT_BEFORE_LOADING_CONFIG") == "1" {
 			// This one is for aggregate reporting
@@ -438,9 +455,12 @@ func handleIssueCommentEvent(gh utils.GithubClientProvider, payload *github.Issu
 
 	commentParts, _, _ := generic.ParseDiggerCommentFlags(commentBody)
 	force := commentParts != nil && commentParts.Force
-	duplicateMsg, _, releaseCommandLock := guardDuplicateCommand(*diggerCommand, force, repoFullName, issueNumber, *commitSha, impactedProjectsForComment)
+	duplicateMsg, duplicate, releaseCommandLock := guardDuplicateCommand(*diggerCommand, force, repoFullName, issueNumber, *commitSha, impactedProjectsForComment)
 	defer releaseCommandLock()
 	if duplicateMsg != "" {
+		if duplicate {
+			duplicateMsg += refusal.record(models.RejectionDuplicateCommand)
+		}
 		commentReporterManager.UpdateComment(duplicateMsg)
 		return nil
 	}
@@ -452,7 +472,11 @@ func handleIssueCommentEvent(gh utils.GithubClientProvider, payload *github.Issu
 			"command", *diggerCommand,
 			"error", err,
 		)
-		commentReporterManager.UpdateComment(locking2.LockFailureComment(err))
+		reply := locking2.LockFailureComment(err)
+		if errors.Is(err, locking.ErrLockedByAnotherPR) {
+			reply += refusal.record(models.RejectionProjectLocked)
+		}
+		commentReporterManager.UpdateComment(reply)
 		return fmt.Errorf("failed perform lock action: %v", err)
 	}
 
@@ -485,7 +509,12 @@ func handleIssueCommentEvent(gh utils.GithubClientProvider, payload *github.Issu
 	if *diggerCommand == scheduler.DiggerCommandApply {
 		err = apply_requirements.CheckApplyRequirements(ghService, impactedProjectsForComment, jobs, issueNumber, *prSourceBranch, targetBranch)
 		if err != nil {
-			commentReporterManager.UpdateComment(fmt.Sprintf(":x: Could not proceed with apply since apply requirements checks have failed: %v", err))
+			reply := fmt.Sprintf(":x: Could not proceed with apply since apply requirements checks have failed: %v", err)
+			// A GitHub error isn't a decision, so it leaves the comment retryable.
+			if errors.As(err, &apply_requirements.UnmetRequirementError{}) {
+				reply += refusal.record(models.RejectionApplyRequirements)
+			}
+			commentReporterManager.UpdateComment(reply)
 			return nil
 		}
 	}
@@ -590,14 +619,18 @@ func handleIssueCommentEvent(gh utils.GithubClientProvider, payload *github.Issu
 		"jobCount", len(impactedProjectsJobMap),
 	)
 
-	origin, err := githubCommandSource(payload)
-	if err != nil {
+	if sourceErr != nil {
 		slog.Error("Could not record command source", "issueNumber", issueNumber,
-			"commentId", userCommentId, "error", err)
-		return fmt.Errorf("record GitHub command source: %w", err)
+			"commentId", userCommentId, "error", sourceErr)
+		return fmt.Errorf("record GitHub command source: %w", sourceErr)
 	}
 
-	batchId, _, err := utils.ConvertJobsToDiggerJobs(*diggerCommand, reporterType, "github", orgId, impactedProjectsJobMap, impactedProjectsMap, projectsGraph, installationId, *prSourceBranch, issueNumber, repoOwner, repoName, repoFullName, *commitSha, &reporterCommentId, diggerYmlStr, 0, aiSummaryCommentId, config.ReportTerraformOutputs, coverAllImpactedProjects, nil, batchCheckRunData, jobCheckRunDataMap, origin)
+	batchId, _, err := utils.ConvertJobsToDiggerJobs(*diggerCommand, reporterType, "github", orgId, impactedProjectsJobMap, impactedProjectsMap, projectsGraph, installationId, *prSourceBranch, issueNumber, repoOwner, repoName, repoFullName, *commitSha, &reporterCommentId, diggerYmlStr, 0, aiSummaryCommentId, config.ReportTerraformOutputs, coverAllImpactedProjects, nil, batchCheckRunData, jobCheckRunDataMap, source)
+	if errors.Is(err, models.ErrCommandSourceRejected) {
+		// Another delivery rejected this comment after the earlier check.
+		commentReporterManager.UpdateComment(alreadyRejectedReply)
+		return nil
+	}
 	if err != nil {
 		slog.Error("Error converting jobs to Digger jobs",
 			"issueNumber", issueNumber,
