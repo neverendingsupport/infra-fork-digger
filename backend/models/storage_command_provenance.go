@@ -75,10 +75,28 @@ type CommandProvenanceJob struct {
 }
 
 func (db *Database) GetCommandProvenance(orgID uint, repoFullName string, prNumber int, sourceCommentID int64) (*CommandProvenance, error) {
+	jobs, _, err := db.readCommandEvidence(orgID, repoFullName, prNumber, sourceCommentID, nil)
+	return jobs, err
+}
+
+// GetCommandEvidence reads the requested projections from one snapshot.
+func (db *Database) GetCommandEvidence(orgID uint, repo *Repo, prNumber int, sourceCommentID int64, includeRejection bool) (*CommandProvenance, *CommandRejection, error) {
+	if repo == nil || orgID != repo.OrganisationID || repo.ID == 0 {
+		return nil, nil, errors.New("invalid command evidence scope")
+	}
+	var scope *Repo
+	if includeRejection {
+		scope = repo
+	}
+	return db.readCommandEvidence(orgID, repo.RepoFullName, prNumber, sourceCommentID, scope)
+}
+
+func (db *Database) readCommandEvidence(orgID uint, repoFullName string, prNumber int, sourceCommentID int64, scope *Repo) (*CommandProvenance, *CommandRejection, error) {
 	if orgID == 0 || repoFullName == "" || prNumber <= 0 || sourceCommentID <= 0 {
-		return nil, errors.New("command provenance requires organisation, repository, PR and source comment")
+		return nil, nil, errors.New("command provenance requires organisation, repository, PR and source comment")
 	}
 	response := &CommandProvenance{Version: 1, Complete: true, Batches: make([]CommandProvenanceBatch, 0)}
+	var receipt *CommandRejection
 	err := db.GormDB.Transaction(func(tx *gorm.DB) error {
 		var origins []BatchCommandOrigin
 		// Scope the immutable installation snapshot, not mutable batch/report IDs.
@@ -102,13 +120,17 @@ func (db *Database) GetCommandProvenance(orgID uint, repoFullName string, prNumb
 			}
 			response.Batches = append(response.Batches, batch)
 		}
+		if scope != nil && len(response.Batches) == 0 {
+			receipt, err = (&Database{GormDB: tx}).getCommandRejection(orgID, scope, prNumber, sourceCommentID)
+			return err
+		}
 		return nil
 	}, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	slog.Debug("digger.command_provenance.queried", "org_id", orgID, "repo", repoFullName, "pr_number", prNumber, "source_comment_id", sourceCommentID, "batch_count", len(response.Batches))
-	return response, nil
+	return response, receipt, nil
 }
 
 func commandProvenanceBatch(tx *gorm.DB, origin BatchCommandOrigin) (CommandProvenanceBatch, error) {

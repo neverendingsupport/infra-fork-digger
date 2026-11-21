@@ -4,10 +4,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/url"
-	"os"
-	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -20,68 +16,8 @@ import (
 	"github.com/diggerhq/digger/libs/scheduler"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
 )
-
-const pr51CommandOriginMigration = "20261030140000_batch_command_origins.sql"
-
-// Each test creates and drops its own database. Set this URL to a disposable
-// PostgreSQL 16 instance whose role can create databases; no default is assumed.
-func pr51CommandOriginPostgresDB(t *testing.T, migrate bool) *models.Database {
-	t.Helper()
-	dsn := os.Getenv("DIGGER_COMMAND_ORIGIN_POSTGRES_DSN")
-	if dsn == "" {
-		t.Skip("set DIGGER_COMMAND_ORIGIN_POSTGRES_DSN for PostgreSQL qualification")
-	}
-	parsed, err := url.Parse(dsn)
-	require.NoError(t, err)
-	require.Contains(t, []string{"postgres", "postgresql"}, parsed.Scheme)
-	query := parsed.Query()
-	query.Set("statement_timeout", "10000")
-	query.Set("lock_timeout", "5000")
-	parsed.RawQuery = query.Encode()
-	admin := pr51CommandOriginPostgresConnect(t, parsed.String())
-	name := "digger41_origin_" + strings.ReplaceAll(uuid.NewString(), "-", "")
-	require.NoError(t, admin.Exec(`CREATE DATABASE "`+name+`"`).Error)
-	t.Cleanup(func() {
-		require.NoError(t, admin.Exec(`DROP DATABASE "`+name+`" WITH (FORCE)`).Error)
-	})
-	parsed.Path = "/" + name
-	db := &models.Database{GormDB: pr51CommandOriginPostgresConnect(t, parsed.String())}
-	files, err := filepath.Glob(filepath.Join("..", "migrations", "*.sql"))
-	require.NoError(t, err)
-	require.NotEmpty(t, files)
-	require.True(t, slices.ContainsFunc(files, func(f string) bool { return filepath.Base(f) == pr51CommandOriginMigration }))
-	for _, path := range files {
-		if filepath.Base(path) == pr51CommandOriginMigration && !migrate {
-			break
-		}
-		pr51CommandOriginApplySQL(t, db.GormDB, path)
-	}
-	return db
-}
-
-func pr51CommandOriginPostgresConnect(t *testing.T, dsn string) *gorm.DB {
-	t.Helper()
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
-	require.NoError(t, err)
-	conn, err := db.DB()
-	require.NoError(t, err)
-	conn.SetMaxOpenConns(4)
-	t.Cleanup(func() { require.NoError(t, conn.Close()) })
-	return db
-}
-
-func pr51CommandOriginApplySQL(t *testing.T, db *gorm.DB, path string) {
-	t.Helper()
-	body, err := os.ReadFile(path)
-	require.NoError(t, err)
-	require.NoError(t, db.Transaction(func(tx *gorm.DB) error {
-		return tx.Exec(string(body)).Error
-	}), filepath.Base(path))
-}
 
 func pr51LegacyStopFixture(t *testing.T, db *models.Database, sibling bool) (models.DiggerBatch, models.Organisation, models.Repo, models.DiggerJob, models.DiggerJob, models.DependencyStopRequest) {
 	t.Helper()
@@ -172,7 +108,7 @@ func TestPR51CheckRejectsPreparedContentsAfterRerun(t *testing.T) {
 			name = "batch"
 		}
 		t.Run(name, func(t *testing.T) {
-			db := pr51CommandOriginPostgresDB(t, true)
+			db := controllers.CommandPostgresDB(t)
 			batch, org, repo, parent, child, req := pr51LegacyStopFixture(t, db, false)
 			pr51Install(t, db)
 			pr51Fence(t, db, batch, org, repo, req, true)
@@ -237,7 +173,7 @@ func TestPR51CheckRejectsPreparedContentsAfterRerun(t *testing.T) {
 }
 
 func TestPR51HistoricalPublicationPreservesCountsThroughWriters(t *testing.T) {
-	db := pr51CommandOriginPostgresDB(t, true)
+	db := controllers.CommandPostgresDB(t)
 	batch, org, repo, parent, _, req := pr51LegacyStopFixture(t, db, true)
 	pr51Install(t, db)
 	sibling, err := db.GetDiggerJob("independent")
@@ -290,7 +226,7 @@ func TestPR51HistoricalPublicationPreservesCountsThroughWriters(t *testing.T) {
 }
 
 func TestPR51ScheduleReadySiblingAtCapacityInFencedBatch(t *testing.T) {
-	db := pr51CommandOriginPostgresDB(t, true)
+	db := controllers.CommandPostgresDB(t)
 	batch, org, repo, parent, child, req := pr51LegacyStopFixture(t, db, true)
 	pr51Install(t, db)
 	ready, err := db.GetDiggerJob("independent")

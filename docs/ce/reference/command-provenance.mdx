@@ -99,6 +99,46 @@ Before permitting an apply, the consumer must verify the source body, repository
 
 Duplicate deliveries can create several batches for one source comment. The API returns all captured batches and does not promise command deduplication. Consumers must account for every batch before treating a recovery plan as settled.
 
+## Read a pre-dispatch apply rejection
+
+Add `command_rejection_version=1` to the source-scoped jobs request. For example, `GET /api/repos/42/jobs?source_comment_id=123456&pr_number=123&command_rejection_version=1` returns a top-level `command_rejection` alongside `repo` and `command_provenance`. A backend that supports this projection returns JSON `null` when it has no qualified receipt visible to the reader. Older backends omit the field. Either result leaves the command unresolved.
+
+A receipt looks like this:
+
+```json
+{
+  "version": 1,
+  "kind": "rejected_before_dispatch",
+  "reason": "not_mergeable",
+  "dispatch_fenced": true,
+  "repository_id": 98765,
+  "repo_full_name": "example/infrastructure",
+  "pr_number": 123,
+  "source_comment_id": 123456,
+  "body_sha256": "ba7707804cf8a8400a1bac3f2d7f291966476b77974b7ca2979ecad1eda5cc02",
+  "commit_sha": "1111111111111111111111111111111111111111",
+  "command": "apply",
+  "app_id": 17,
+  "installation_id": 29
+}
+```
+
+Match the receipt to the original command, including its accepted body, repository ID, original PR head and the Digger App and installation trusted for that attempt. The current PR head may have advanced. The endpoint checks the caller's Digger organisation, the original Digger repository record and its current active GitHub installation. If that organisation migrates the repository to another App, the receipt still identifies the original App. A consumer that cannot verify that identity must retain the attempt.
+
+Digger records this receipt for a created `digger apply` or `digger apply -p PROJECT` comment when the project's mergeability requirement fails. It checks the repository, PR and head on the GitHub response used for that decision. A check button, automatic PR event or drift issue can still request its own work without a source-comment receipt. Missing mergeability, provider errors, other requirement failures and edited comments produce no receipt. The database commits the decision before Digger posts the rejection, so losing or deleting the reply doesn't erase the evidence.
+
+A qualifying handler checks mergeability before taking project locks. Every upgraded comment handler must win admission before it can take an apply lock or publish job checks. Other commands and older replicas can already hold locks on the same PR. The receipt covers only jobs for this source comment. To retry, prepare a fresh valid plan, obtain the usual approvals and post a **new comment**. Editing or redelivering the rejected comment cannot start jobs.
+
+### Enable receipt production
+
+Deploy the migration and the new backend with `DIGGER_COMMAND_REJECTION_AFTER` unset. Once both replicas and any in-flight comment handlers have finished the cutover, set it to an RFC 3339 UTC timestamp at or after that cutover. Digger qualifies only comments created strictly after both that timestamp and the database migration. Historical replies and empty manifests remain insufficient for automatic recovery.
+
+For the NES deployment, the backend release tag promotes the image. The infrastructure team separately reviews the timestamp in `infra-01/digger.yaml` in `argo-apps`. The database migration alone leaves publication off.
+
+All upgraded replicas reserve the source in PostgreSQL before building an apply batch, including replicas with receipt production disabled. Admission and rejection compete for the same permanent row. An admission survives a crash before batch creation or after partial dispatch. A later requirements failure cannot overwrite it.
+
+The migration also guards the batch-origin insert used by backend `.nes.13`. A delayed writer or rollback to that version can take project locks, publish checks and allocate tokens or an empty batch, but it must insert the origin before it can create the first job. PostgreSQL refuses that insert for a rejected source. Triggers reject `UPDATE`, `DELETE` and `TRUNCATE` on `command_decisions` and on the `command_rejection_epoch` cutover row. A database role that can disable triggers or drop these tables can still erase them. Keep the migration and its triggers installed when rolling back. Before enabling the consumer, verify that all comment-triggered apply workflows go through Digger. Once a consumer can act on receipts, every subsequent sender must honor the fence, including during disaster recovery. Rolling back past mandatory origin capture, adding a direct comment workflow or restoring a database that lost decisions would let a settled command execute.
+
 ## Workflow dispatch
 
 A project with several dependencies has one job shared by all of its parents. When the parents finish together, the backend commits a dispatch claim before calling GitHub. Only the caller that acquires that claim can send the workflow request. A late status report, including `created`, cannot erase the claim or permit another dispatch. Accepted status reports update the job's progress and workflow attempt together.

@@ -103,3 +103,9 @@ workflows:
       on_commit_to_default: ["digger unlock"]
       skip_merge_check: true
 ```
+
+## Retry after a failed requirement
+
+Fix the requirement, then post a new `digger apply` comment. Editing the failed comment does nothing, because Digger acts only on new comments.
+
+On the NES fork, your operator may have turned on [rejection receipts](/ce/reference/command-provenance#read-a-pre-dispatch-apply-rejection). Then a refused comment can be fenced permanently. Digger records the refusal when the mergeable requirement is the one that failed and the comment is new, unedited and contains only `digger apply` or `digger apply -p PROJECT`. It skips the record when GitHub hasn't settled the PR's mergeability or another requirement fails first. Once Digger records the refusal, it won't start jobs from that comment, even if GitHub delivers it again after the PR becomes mergeable. A new comment is a new command, so it runs normally.
